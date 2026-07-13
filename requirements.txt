@@ -1,0 +1,8 @@
+PySide6
+NodeGraphQt
+setuptools<81
+PyAutoGUI
+opencv-python
+Pillow
+pytesseract
+mss
