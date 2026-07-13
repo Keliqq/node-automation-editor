@@ -4,6 +4,7 @@ import pytesseract
 
 from core.exec_node import DataNode
 from core.ocr import read_text
+from core.region_selector import select_region
 from core.screen import grab_region_rgb
 
 _NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
@@ -34,22 +35,41 @@ class ReadTextFromScreenNode(DataNode):
         self.add_data_input("ширина_области", dtype="int", default=100)
         self.add_data_input("высота_области", dtype="int", default=40)
         self.add_checkbox("только_цифры", "Только цифры", state=True)
+        self.add_button("выбрать_область", "Область:", "Выбрать на экране")
+        widget = self.get_widget("выбрать_область")
+        if widget is not None:
+            widget.value_changed.connect(self._on_select_region)
         self.add_data_output("текст")
         self.add_data_output("число")
         self.set_color(70, 115, 95)
 
+    def _on_select_region(self, *args):
+        result = select_region()
+        if result and len(result) == 4:
+            x_val, y_val, w, h = result
+            for name, val in [("x", x_val), ("y", y_val), ("ширина_области", w), ("высота_области", h)]:
+                if self.get_property(name) != val:
+                    self.set_property(name, val)
+            self.view.draw_node()
+
     def compute(self, engine):
-        x = int(engine.get_input_value(self, "x") or 0)
-        y = int(engine.get_input_value(self, "y") or 0)
-        width = int(engine.get_input_value(self, "ширина_области") or 0)
-        height = int(engine.get_input_value(self, "высота_области") or 0)
+        x_val = int(self.get_property("x") or 0)
+        y_val = int(self.get_property("y") or 0)
+        width = int(self.get_property("ширина_области") or 0)
+        height = int(self.get_property("высота_области") or 0)
         digits_only = bool(self.get_property("только_цифры"))
         empty = {"текст": "", "число": None}
+
+        engine.log_message.emit(
+            f"[OCR] run_id={engine.run_id} step={engine.step_id} "
+            f"x={x_val} y={y_val} w={width} h={height} "
+            f"props: x={self.get_property('x')} y={self.get_property('y')}"
+        )
 
         if width <= 0 or height <= 0:
             return empty
 
-        region = grab_region_rgb(x, y, width, height)
+        region = grab_region_rgb(x_val, y_val, width, height)
         try:
             text = read_text(region, digits_only=digits_only)
         except pytesseract.TesseractNotFoundError:

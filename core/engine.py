@@ -24,6 +24,7 @@ class GraphEngine(QtCore.QThread):
         super().__init__(parent)
         self.graph = graph
         self.step_id = 0
+        self.run_id = 0
         self._stop_event = threading.Event()
 
     def stop(self):
@@ -34,9 +35,15 @@ class GraphEngine(QtCore.QThread):
 
     def run(self):
         from nodes.events import StartNode
+        from core.exec_node import DataNode
 
         self._stop_event.clear()
         self.step_id = 0
+        self.run_id += 1
+
+        for node in self.graph.all_nodes():
+            if isinstance(node, DataNode):
+                node._cache_key = None
 
         start_nodes = [n for n in self.graph.all_nodes() if isinstance(n, StartNode)]
         if not start_nodes:

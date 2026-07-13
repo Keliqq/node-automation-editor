@@ -67,7 +67,7 @@ class DataNode(BaseNode):
 
     def __init__(self):
         super().__init__()
-        self._cache_step = -1
+        self._cache_key = None
         self._cache = {}
 
     def add_data_input(self, name, dtype="str", default=None, tooltip=None):
@@ -89,7 +89,8 @@ class DataNode(BaseNode):
         raise NotImplementedError
 
     def get_output_value(self, engine, name):
-        if self._cache_step != engine.step_id:
+        cache_key = (engine.run_id, engine.step_id)
+        if self._cache_key != cache_key:
             self._cache = self.compute(engine) or {}
-            self._cache_step = engine.step_id
+            self._cache_key = cache_key
         return self._cache.get(name)
