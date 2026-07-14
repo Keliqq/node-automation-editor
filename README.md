@@ -52,6 +52,19 @@ python main.py
 
 A broken user node file is logged and skipped — it won't crash the app.
 
+## Building a standalone .exe
+
+To hand the app to someone without Python installed:
+
+```bash
+pip install -r requirements-build.txt
+pyinstaller --noconfirm node_editor.spec
+xcopy /E /I examples dist\NodeAutomationEditor\examples
+xcopy /E /I user_nodes dist\NodeAutomationEditor\user_nodes
+```
+
+`dist\NodeAutomationEditor\` is the whole thing to hand over — `examples/` and `user_nodes/` sit next to the `.exe` there and stay user-editable (drop a plugin `.py` right in), unlike PyInstaller's own bundled `datas`, which live in a location that's awkward to reach and gets recreated every build. Tesseract OCR still needs to be installed separately on the target machine (see Requirements above) — PyInstaller only bundles the Python side.
+
 ## License
 
 [MIT](LICENSE)

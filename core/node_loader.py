@@ -10,10 +10,10 @@
 import importlib.util
 import os
 
+from core.app_paths import APP_ROOT
 from core.exec_node import DataNode, ExecNode
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-USER_NODES_DIR = os.path.join(PROJECT_ROOT, "user_nodes")
+USER_NODES_DIR = os.path.join(APP_ROOT, "user_nodes")
 
 _BASE_CLASSES = (ExecNode, DataNode)
 

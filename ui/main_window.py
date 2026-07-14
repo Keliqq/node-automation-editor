@@ -5,6 +5,7 @@ from NodeGraphQt import NodeGraph, NodesTreeWidget, PropertiesBinWidget
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import core.nodegraphqt_patches  # noqa: F401  чинит числовые виджеты NodeGraphQt до их использования
+from core.app_paths import APP_ROOT
 from core.engine import GraphEngine
 from core.hotkeys import HotkeyManager, get_stop_hotkey, set_stop_hotkey
 from core.ocr import get_tesseract_path, set_tesseract_path
@@ -12,8 +13,7 @@ from nodes import ALL_NODES
 
 RUNNING_COLOR = (240, 200, 60)
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXAMPLES_DIR = os.path.join(PROJECT_ROOT, "examples")
+EXAMPLES_DIR = os.path.join(APP_ROOT, "examples")
 
 CATEGORY_LABELS = {
     "automation.events": "События",

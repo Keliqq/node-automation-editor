@@ -55,6 +55,12 @@ Both share `add_data_input`/`add_data_output`, which back a node property (shown
 
 A global hotkey (default `F9`, stored via `QSettings`, changeable in Настройки) stops every running tab's engine at once, even when the app isn't focused — the whole point of a panic button, since the automation itself may be driving the mouse/keyboard over some other window. The `keyboard` library's hook callback runs on its own non-Qt thread, so the callback is just `emergency_stop_requested.emit()`; the actual stop logic (`MainWindow._stop_all_engines`) runs on the GUI thread via the normal cross-thread signal/slot queued connection — don't touch widgets or `_tab_data` directly from the hotkey callback. Windows UIPI means this can't see keypresses over a higher-privileged (elevated) foreground window unless the editor is elevated too.
 
+### App root resolution / PyInstaller build (`core/app_paths.py`, `node_editor.spec`)
+
+`APP_ROOT` is the repo root when running from source, but `os.path.dirname(sys.executable)` when frozen (`sys.frozen`) — `ui/main_window.py`'s `EXAMPLES_DIR` and `core/node_loader.py`'s `USER_NODES_DIR` are both built from it. Don't compute these via `__file__` directly in a frozen build: PyInstaller onefile extracts to a throwaway temp dir (`sys._MEIPASS`) that's wiped after the process exits, which would make `user_nodes/`/`examples/` invisible between runs and impossible for a user to actually edit.
+
+Build with `pyinstaller --noconfirm node_editor.spec` (onedir, not onefile — so `examples/`/`user_nodes/` can be copied next to the `.exe` as plain, user-editable folders afterward; see README "Building a standalone .exe"). The spec adds `PySide6.QtSvg`/`QtSvgWidgets` as hidden imports and NodeGraphQt's `widgets/icons/node_base.png` as data — both are only reachable through NodeGraphQt's dynamic `Qt.py` binding shim, which PyInstaller's static analysis doesn't see, so without them the frozen exe fails at import time (`ImportError: cannot import name 'QtSvg' from 'Qt'`) or renders without the base node icon.
+
 ### Screen/vision layer
 
 - `core/screen.py` — `mss`-based capture; monitor coordinates can be negative (multi-monitor virtual desktop), so don't assume `x`/`y` >= 0.

@@ -8,3 +8,7 @@ venv/
 .vscode/
 .idea/
 graph.json
+
+# PyInstaller build output (see node_editor.spec)
+build/
+dist/
