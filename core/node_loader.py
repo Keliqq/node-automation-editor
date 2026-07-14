@@ -45,9 +45,14 @@ def discover_user_nodes(log=None):
 
         path = os.path.join(USER_NODES_DIR, filename)
         module_name = f"user_nodes.{filename[:-3]}"
+
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            _log(f"{filename}: не удалось создать спецификацию модуля")
+            continue
+
+        module = importlib.util.module_from_spec(spec)
         try:
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
         except Exception as exc:
             _log(f"{filename}: ошибка загрузки — {exc}")
