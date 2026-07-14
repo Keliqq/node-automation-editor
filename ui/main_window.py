@@ -24,6 +24,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1400, 900)
 
         self.graph = NodeGraph()
+        self.graph.set_acyclic(False)
         self.graph.register_nodes(ALL_NODES)
 
         self._node_colors = {}
@@ -33,6 +34,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._build_menu()
+        self._build_context_menu()
         self._seed_default_graph()
 
     def _build_ui(self):
@@ -105,6 +107,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         settings_menu = self.menuBar().addMenu("Настройки")
         settings_menu.addAction("Путь к Tesseract OCR...", self.choose_tesseract_path)
+
+    def _build_context_menu(self):
+        graph_menu = self.graph.get_context_menu("graph")
+        if graph_menu is None:
+            return
+        graph_menu.add_command("Удалить", self._delete_selected_nodes, shortcut="Del")
+
+    def _delete_selected_nodes(self, graph):
+        nodes = graph.selected_nodes()
+        if nodes:
+            graph.delete_nodes(nodes)
 
     def _seed_default_graph(self):
         self.graph.create_node("automation.events.StartNode", name="Старт", pos=[0, 0])

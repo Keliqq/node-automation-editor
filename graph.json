@@ -1,7 +1,7 @@
 {
   "graph":{
     "layout_direction":0,
-    "acyclic":true,
+    "acyclic":false,
     "pipe_collision":false,
     "pipe_slicing":true,
     "pipe_style":1,
@@ -9,10 +9,10 @@
     "reject_connection_types":"{}"
   },
   "nodes":{
-    "0x254f2bb9e50":{
+    "0x2a00a6e5350":{
       "type_":"automation.events.StartNode",
       "icon":null,
-      "name":"Start",
+      "name":"\u0421\u0442\u0430\u0440\u0442",
       "color":[
         60,
         130,
@@ -37,14 +37,14 @@
       "width":160,
       "height":60,
       "pos":[
-        164.8844601681812,
-        -63.642683679452915
+        0.0,
+        0.0
       ],
       "layout_direction":0,
       "port_deletion_allowed":false,
       "subgraph_session":{}
     },
-    "0x254f2bba210":{
+    "0x2a00a6e5480":{
       "type_":"automation.debug.PrintValueNode",
       "icon":null,
       "name":"\u0412\u044b\u0432\u0435\u0441\u0442\u0438 \u0432 \u043a\u043e\u043d\u0441\u043e\u043b\u044c",
@@ -72,25 +72,25 @@
       "width":160,
       "height":97.3,
       "pos":[
-        1112.788781828808,
-        280.0081448808088
+        578.7277834079922,
+        -194.24097960110709
       ],
       "layout_direction":0,
       "port_deletion_allowed":false,
       "subgraph_session":{},
       "custom":{
-        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435":"",
+        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435":"\u0422\u0438\u043a 2",
         "\u043c\u0435\u0442\u043a\u0430":""
       }
     },
-    "0x254f298bbb0":{
-      "type_":"automation.vision.ReadTextFromScreenNode",
+    "0x2a00a6e56e0":{
+      "type_":"automation.flow.WhileLoopNode",
       "icon":null,
-      "name":"\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u0442\u0435\u043a\u0441\u0442 \u0441 \u044d\u043a\u0440\u0430\u043d\u0430",
+      "name":"\u0426\u0438\u043a\u043b \u041f\u043e\u043a\u0430",
       "color":[
-        70,
-        115,
         95,
+        95,
+        140,
         255
       ],
       "border_color":[
@@ -108,67 +108,24 @@
       "disabled":false,
       "selected":false,
       "visible":true,
-      "width":327.0,
-      "height":124.60000000000001,
+      "width":200.0,
+      "height":97.3,
       "pos":[
-        678.6549860643127,
-        351.2534087083624
+        268.22794370528493,
+        57.172506967843645
       ],
       "layout_direction":0,
       "port_deletion_allowed":false,
       "subgraph_session":{},
       "custom":{
-        "x":0,
-        "y":0,
-        "\u0448\u0438\u0440\u0438\u043d\u0430_\u043e\u0431\u043b\u0430\u0441\u0442\u0438":99,
-        "\u0432\u044b\u0441\u043e\u0442\u0430_\u043e\u0431\u043b\u0430\u0441\u0442\u0438":99,
-        "\u0442\u043e\u043b\u044c\u043a\u043e_\u0446\u0438\u0444\u0440\u044b":false
+        "\u0443\u0441\u043b\u043e\u0432\u0438\u0435":true,
+        "\u043c\u0430\u043a\u0441_\u0438\u0442\u0435\u0440\u0430\u0446\u0438\u0439":5
       }
     },
-    "0x254f298bce0":{
-      "type_":"automation.vision.FindImageOnScreenNode",
+    "0x2a00a6e5940":{
+      "type_":"automation.flow.WaitNode",
       "icon":null,
-      "name":"\u041d\u0430\u0439\u0442\u0438 \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0443 \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435",
-      "color":[
-        70,
-        115,
-        95,
-        255
-      ],
-      "border_color":[
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color":[
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled":false,
-      "selected":false,
-      "visible":true,
-      "width":409.0,
-      "height":124.60000000000001,
-      "pos":[
-        -25.319617529616977,
-        213.4235229315312
-      ],
-      "layout_direction":0,
-      "port_deletion_allowed":false,
-      "subgraph_session":{},
-      "custom":{
-        "\u043f\u0443\u0442\u044c_\u043a_\u0448\u0430\u0431\u043b\u043e\u043d\u0443":"C:/Users/bilal/Desktop/screen/2.png",
-        "\u0442\u043e\u0447\u043d\u043e\u0441\u0442\u044c":0.85,
-        "\u043c\u043e\u043d\u0438\u0442\u043e\u0440":"\u041c\u043e\u043d\u0438\u0442\u043e\u0440 2 (1920x1080)"
-      }
-    },
-    "0x254962482b0":{
-      "type_":"automation.flow.IfElseNode",
-      "icon":null,
-      "name":"\u0415\u0441\u043b\u0438 / \u0418\u043d\u0430\u0447\u0435",
+      "name":"\u0416\u0434\u0430\u0442\u044c",
       "color":[
         95,
         95,
@@ -193,17 +150,17 @@
       "width":160,
       "height":74.2,
       "pos":[
-        471.7116415721778,
-        -44.65733055165765
+        657.4230989691519,
+        11.999436658589161
       ],
       "layout_direction":0,
       "port_deletion_allowed":false,
       "subgraph_session":{},
       "custom":{
-        "\u0443\u0441\u043b\u043e\u0432\u0438\u0435":true
+        "\u0441\u0435\u043a\u0443\u043d\u0434\u044b":1.0
       }
     },
-    "0x254962483e0":{
+    "0x2a00a6e5a70":{
       "type_":"automation.debug.PrintValueNode",
       "icon":null,
       "name":"\u0412\u044b\u0432\u0435\u0441\u0442\u0438 \u0432 \u043a\u043e\u043d\u0441\u043e\u043b\u044c 1",
@@ -231,93 +188,14 @@
       "width":160,
       "height":97.3,
       "pos":[
-        740.9417465555043,
-        -176.19684528809918
+        639.0,
+        217.0
       ],
       "layout_direction":0,
       "port_deletion_allowed":false,
       "subgraph_session":{},
       "custom":{
-        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435":"",
-        "\u043c\u0435\u0442\u043a\u0430":""
-      }
-    },
-    "0x25496248510":{
-      "type_":"automation.actions.ClickNode",
-      "icon":null,
-      "name":"\u041a\u043b\u0438\u043a",
-      "color":[
-        140,
-        95,
-        60,
-        255
-      ],
-      "border_color":[
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color":[
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled":false,
-      "selected":false,
-      "visible":true,
-      "width":215.0,
-      "height":101.5,
-      "pos":[
-        723.7419630604413,
-        99.38633204278591
-      ],
-      "layout_direction":0,
-      "port_deletion_allowed":false,
-      "subgraph_session":{},
-      "custom":{
-        "x":0,
-        "y":0,
-        "\u043a\u043d\u043e\u043f\u043a\u0430":"\u041f\u0440\u0430\u0432\u0430\u044f"
-      }
-    },
-    "0x254962496e0":{
-      "type_":"automation.debug.PrintValueNode",
-      "icon":null,
-      "name":"\u0412\u044b\u0432\u0435\u0441\u0442\u0438 \u0432 \u043a\u043e\u043d\u0441\u043e\u043b\u044c 2",
-      "color":[
-        120,
-        120,
-        60,
-        255
-      ],
-      "border_color":[
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color":[
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled":false,
-      "selected":false,
-      "visible":true,
-      "width":160,
-      "height":97.3,
-      "pos":[
-        1163.0,
-        482.0
-      ],
-      "layout_direction":0,
-      "port_deletion_allowed":false,
-      "subgraph_session":{},
-      "custom":{
-        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435":"",
+        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435":"\u0426\u0438\u043a\u043b \u0437\u0430\u043a\u043e\u043d\u0447\u0438\u043b\u0441\u044f",
         "\u043c\u0435\u0442\u043a\u0430":""
       }
     }
@@ -325,72 +203,52 @@
   "connections":[
     {
       "out":[
-        "0x254f2bb9e50",
+        "0x2a00a6e5350",
         "\u0432\u044b\u0445\u043e\u0434"
       ],
       "in":[
-        "0x254962482b0",
+        "0x2a00a6e56e0",
         "\u0432\u0445\u043e\u0434"
       ]
     },
     {
       "in":[
-        "0x254f2bba210",
-        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435"
+        "0x2a00a6e5480",
+        "\u0432\u0445\u043e\u0434"
       ],
       "out":[
-        "0x254f298bbb0",
-        "\u0447\u0438\u0441\u043b\u043e"
-      ]
-    },
-    {
-      "in":[
-        "0x254f298bbb0",
-        "x"
-      ],
-      "out":[
-        "0x254f298bce0",
-        "x"
-      ]
-    },
-    {
-      "in":[
-        "0x254f298bbb0",
-        "y"
-      ],
-      "out":[
-        "0x254f298bce0",
-        "y"
+        "0x2a00a6e5940",
+        "\u0432\u044b\u0445\u043e\u0434"
       ]
     },
     {
       "out":[
-        "0x254f298bbb0",
-        "\u0442\u0435\u043a\u0441\u0442"
+        "0x2a00a6e5480",
+        "\u0432\u044b\u0445\u043e\u0434"
       ],
       "in":[
-        "0x254962496e0",
-        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435"
+        "0x2a00a6e56e0",
+        "\u0432\u0445\u043e\u0434"
       ]
     },
     {
       "out":[
-        "0x254f298bce0",
-        "\u043d\u0430\u0439\u0434\u0435\u043d\u043e"
+        "0x2a00a6e56e0",
+        "\u0442\u0435\u043b\u043e_\u0446\u0438\u043a\u043b\u0430"
       ],
       "in":[
-        "0x254962482b0",
-        "\u0443\u0441\u043b\u043e\u0432\u0438\u0435"
+        "0x2a00a6e5940",
+        "\u0432\u0445\u043e\u0434"
       ]
     },
     {
       "out":[
-        "0x254962482b0",
-        "\u043b\u043e\u0436\u044c"
+        "0x2a00a6e56e0",
+        "\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e"
       ],
       "in":[
-        "0x254962483e0",
-        "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435"
+        "0x2a00a6e5a70",
+        "\u0432\u0445\u043e\u0434"
       ]
     }
   ]

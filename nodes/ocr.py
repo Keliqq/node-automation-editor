@@ -60,12 +60,6 @@ class ReadTextFromScreenNode(DataNode):
         digits_only = bool(self.get_property("только_цифры"))
         empty = {"текст": "", "число": None}
 
-        engine.log_message.emit(
-            f"[OCR] run_id={engine.run_id} step={engine.step_id} "
-            f"x={x_val} y={y_val} w={width} h={height} "
-            f"props: x={self.get_property('x')} y={self.get_property('y')}"
-        )
-
         if width <= 0 or height <= 0:
             return empty
 
