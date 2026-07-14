@@ -1,3 +1,4 @@
+from core.node_loader import discover_user_nodes
 from nodes.actions import ClickNode, KeyPressNode, MoveMouseNode, TypeTextNode
 from nodes.debug import PrintValueNode
 from nodes.events import StartNode
@@ -5,7 +6,7 @@ from nodes.flow import IfElseNode, WaitNode, WhileLoopNode
 from nodes.ocr import ReadTextFromScreenNode
 from nodes.vision import FindImageOnScreenNode, PixelColorMatchNode
 
-ALL_NODES = [
+BUILTIN_NODES = [
     StartNode,
     IfElseNode,
     WhileLoopNode,
@@ -19,3 +20,9 @@ ALL_NODES = [
     TypeTextNode,
     PrintValueNode,
 ]
+
+# ALL_NODES — общий изменяемый список: MainWindow дозаписывает в него новые
+# классы через .extend(...) при "Обновить список нод", не пересоздавая
+# список, иначе модули, уже сделавшие "from nodes import ALL_NODES",
+# продолжили бы видеть старую версию.
+ALL_NODES = BUILTIN_NODES + discover_user_nodes()

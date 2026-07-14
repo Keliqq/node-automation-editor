@@ -155,11 +155,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._make_action(edit_menu, "Отменить", self._undo, StandardKey.Undo)
         self._make_action(edit_menu, "Повторить", self._redo, StandardKey.Redo)
 
-        nodes_menu = self.menuBar().addMenu("Добавить узел")
-        for node_cls in ALL_NODES:
-            node_type = f"{node_cls.__identifier__}.{node_cls.__name__}"
-            label = f"{CATEGORY_LABELS.get(node_cls.__identifier__, node_cls.__identifier__)} — {node_cls.NODE_NAME}"
-            nodes_menu.addAction(label, lambda checked=False, nt=node_type: self._add_node(nt))
+        self.nodes_menu = self.menuBar().addMenu("Добавить узел")
+        self._populate_nodes_menu()
 
         view_menu = self.menuBar().addMenu("Вид")
         for dock in self._docks:
@@ -171,6 +168,45 @@ class MainWindow(QtWidgets.QMainWindow):
 
         settings_menu = self.menuBar().addMenu("Настройки")
         settings_menu.addAction("Путь к Tesseract OCR...", self.choose_tesseract_path)
+
+    def _populate_nodes_menu(self):
+        self.nodes_menu.clear()
+        self.nodes_menu.addAction("Обновить список нод (папка user_nodes)", self._refresh_user_nodes)
+        self.nodes_menu.addSeparator()
+        for node_cls in ALL_NODES:
+            node_type = f"{node_cls.__identifier__}.{node_cls.__name__}"
+            label = f"{CATEGORY_LABELS.get(node_cls.__identifier__, node_cls.__identifier__)} — {node_cls.NODE_NAME}"
+            self.nodes_menu.addAction(label, lambda checked=False, nt=node_type: self._add_node(nt))
+
+    def _refresh_user_nodes(self):
+        """Пересканирует user_nodes/ и подключает новые классы нод везде, где
+        нужно: в общий список, в уже открытые вкладки (свежие вкладки и так
+        получат их через ALL_NODES) и в панель/меню нод — без перезапуска."""
+        from core.node_loader import discover_user_nodes
+
+        discovered = discover_user_nodes(log=lambda msg: self.log_view.appendPlainText(f"[Ноды] {msg}"))
+        existing_types = {f"{cls.__identifier__}.{cls.__name__}" for cls in ALL_NODES}
+        new_classes = [
+            cls for cls in discovered if f"{cls.__identifier__}.{cls.__name__}" not in existing_types
+        ]
+        if not new_classes:
+            self.status_label.setText("Новых нод не найдено")
+            return
+
+        ALL_NODES.extend(new_classes)
+
+        for tab in self._tab_data.values():
+            try:
+                tab.graph.register_nodes(new_classes)
+            except Exception as exc:
+                self.log_view.appendPlainText(f"[Ноды] Не удалось добавить в открытую вкладку: {exc}")
+
+        if self.nodes_tree is not None:
+            self.nodes_tree.update()
+            self._remove_tree_category(self.nodes_tree, "nodeGraphQt.nodes")
+
+        self._populate_nodes_menu()
+        self.status_label.setText(f"Добавлено новых нод: {len(new_classes)}")
 
     def _refresh_examples_menu(self):
         """Перечитывает папку examples/ при каждом открытии меню, чтобы новые
