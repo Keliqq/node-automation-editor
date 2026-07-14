@@ -5,8 +5,13 @@ from core.ports import DATA_PORT_COLOR, EXEC_IN, EXEC_OUT, EXEC_PORT_COLOR
 
 _WIDGET_BY_DTYPE = {
     "bool": NodePropWidgetEnum.QCHECK_BOX.value,
-    "int": NodePropWidgetEnum.QSPIN_BOX.value,
-    "float": NodePropWidgetEnum.QDOUBLESPIN_BOX.value,
+    # QSPIN_BOX/QDOUBLESPIN_BOX виджеты в панели свойств NodeGraphQt
+    # создаются без setRange(...), поэтому у них дефолтный диапазон Qt
+    # 0..99 — любое значение вне него (например, координаты области для
+    # OCR) сразу же зажимается обратно в свойство. INT/FLOAT используют
+    # текстовый редактор без ограничения диапазона.
+    "int": NodePropWidgetEnum.INT.value,
+    "float": NodePropWidgetEnum.FLOAT.value,
     "str": NodePropWidgetEnum.QLINE_EDIT.value,
     "file": NodePropWidgetEnum.FILE_OPEN.value,
 }

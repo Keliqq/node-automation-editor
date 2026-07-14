@@ -1,5 +1,8 @@
+import os
+from typing import Optional
+
 from NodeGraphQt import NodeGraph, NodesTreeWidget, PropertiesBinWidget
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import core.nodegraphqt_patches  # noqa: F401  чинит числовые виджеты NodeGraphQt до их использования
 from core.engine import GraphEngine
@@ -7,6 +10,9 @@ from core.ocr import get_tesseract_path, set_tesseract_path
 from nodes import ALL_NODES
 
 RUNNING_COLOR = (240, 200, 60)
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EXAMPLES_DIR = os.path.join(PROJECT_ROOT, "examples")
 
 CATEGORY_LABELS = {
     "automation.events": "События",
@@ -17,42 +23,52 @@ CATEGORY_LABELS = {
 }
 
 
+class GraphTab:
+    """Состояние одной вкладки: свой граф, своя панель свойств, свой движок."""
+
+    def __init__(self, graph, properties_bin):
+        self.graph = graph
+        self.properties_bin = properties_bin
+        self.engine: Optional[GraphEngine] = None
+        self.session_path: Optional[str] = None
+        self.node_colors = {}
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Редактор нод для автоматизации игр")
         self.resize(1400, 900)
 
-        self.graph = NodeGraph()
-        self.graph.set_acyclic(False)
-        self.graph.register_nodes(ALL_NODES)
-
-        self._node_colors = {}
-        self.engine = None
-        self._session_path = None
         self._next_node_pos = [300, 0]
+        self._new_tab_counter = 0
+        self.nodes_tree = None
+        self._tab_data = {}  # graph.widget -> GraphTab; словарь вместо атрибута на виджете,
+        # т.к. NodeGraphWidget — чужой класс без объявленного поля tab_data
 
         self._build_ui()
         self._build_menu()
-        self._build_context_menu()
-        self._seed_default_graph()
+        self.new_graph()
 
+    # ---- построение интерфейса ----
     def _build_ui(self):
-        self.setCentralWidget(self.graph.widget)
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setTabsClosable(True)
+        self.tabs.setMovable(True)
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabCloseRequested.connect(self._close_tab)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.setCentralWidget(self.tabs)
 
-        self.nodes_tree = NodesTreeWidget(node_graph=self.graph)
-        for category, label in CATEGORY_LABELS.items():
-            self.nodes_tree.set_category_label(category, label)
-        self._remove_tree_category("nodeGraphQt.nodes")  # встроенная нода Backdrop, здесь не нужна
         palette_dock = QtWidgets.QDockWidget("Ноды (перетащи на холст)", self)
         palette_dock.setObjectName("palette_dock")
-        palette_dock.setWidget(self.nodes_tree)
+        self.palette_dock = palette_dock
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, palette_dock)
 
-        self.properties_bin = PropertiesBinWidget(node_graph=self.graph)
+        self.properties_stack = QtWidgets.QStackedWidget()
         properties_dock = QtWidgets.QDockWidget("Свойства", self)
         properties_dock.setObjectName("properties_dock")
-        properties_dock.setWidget(self.properties_bin)
+        properties_dock.setWidget(self.properties_stack)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, properties_dock)
 
         self.log_view = QtWidgets.QPlainTextEdit()
@@ -77,23 +93,67 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label = QtWidgets.QLabel("Готово")
         self.statusBar().addPermanentWidget(self.status_label)
 
-    def _remove_tree_category(self, category_label):
-        tree = self.nodes_tree
+        next_tab_action = QtGui.QAction(self)
+        next_tab_action.setShortcut("Ctrl+Tab")
+        next_tab_action.triggered.connect(lambda: self._step_tab(1))
+        self.addAction(next_tab_action)
+
+        prev_tab_action = QtGui.QAction(self)
+        prev_tab_action.setShortcut("Ctrl+Shift+Tab")
+        prev_tab_action.triggered.connect(lambda: self._step_tab(-1))
+        self.addAction(prev_tab_action)
+
+    def _remove_tree_category(self, tree, category_label):
         for i in reversed(range(tree.topLevelItemCount())):
             item = tree.topLevelItem(i)
             if item is not None and item.text(0) == category_label:
                 tree.takeTopLevelItem(i)
 
+    def _ensure_nodes_tree(self, graph):
+        """Список нод одинаков для любого графа, поэтому дерево строится один
+        раз (по фактории первого графа) и используется всеми вкладками —
+        перетаскивание ноды всё равно попадает на холст активной вкладки."""
+        if self.nodes_tree is not None:
+            return
+        tree = NodesTreeWidget(node_graph=graph)
+        for category, label in CATEGORY_LABELS.items():
+            tree.set_category_label(category, label)
+        self._remove_tree_category(tree, "nodeGraphQt.nodes")  # встроенная нода Backdrop, здесь не нужна
+        self.palette_dock.setWidget(tree)
+        self.nodes_tree = tree
+
+    def _make_action(self, parent, text, slot, shortcut=None):
+        """QMenu.addAction(text, slot) неоднозначно типизирован в стабах
+        PySide6 (может резолвиться в перегрузку, возвращающую None), из-за
+        чего статический анализатор ругается на .setShortcut(...) ниже.
+        Создаём QAction явно, чтобы тип результата был однозначным."""
+        action = QtGui.QAction(text, parent)
+        action.triggered.connect(slot)
+        if shortcut is not None:
+            action.setShortcut(shortcut)
+        parent.addAction(action)
+        return action
+
     def _build_menu(self):
         file_menu = self.menuBar().addMenu("Файл")
-        file_menu.addAction("Новый граф", self.new_graph)
-        file_menu.addAction("Открыть...", self.open_graph)
-        file_menu.addAction("Сохранить", self.save_graph)
-        file_menu.addAction("Сохранить как...", self.save_graph_as)
+
+        StandardKey = QtGui.QKeySequence.StandardKey
+        self._make_action(file_menu, "Новый граф", self.new_graph, StandardKey.New)
+        self._make_action(file_menu, "Открыть...", lambda: self.open_graph(), StandardKey.Open)
+        self._make_action(file_menu, "Сохранить", self.save_graph, StandardKey.Save)
+        self._make_action(file_menu, "Сохранить как...", self.save_graph_as, StandardKey.SaveAs)
+
+        file_menu.addSeparator()
+        self._make_action(
+            file_menu,
+            "Закрыть вкладку",
+            lambda: self._close_tab(self.tabs.currentIndex()),
+            StandardKey.Close,
+        )
 
         edit_menu = self.menuBar().addMenu("Правка")
-        edit_menu.addAction("Отменить", self.graph.undo_stack().undo)
-        edit_menu.addAction("Повторить", self.graph.undo_stack().redo)
+        self._make_action(edit_menu, "Отменить", self._undo, StandardKey.Undo)
+        self._make_action(edit_menu, "Повторить", self._redo, StandardKey.Redo)
 
         nodes_menu = self.menuBar().addMenu("Добавить узел")
         for node_cls in ALL_NODES:
@@ -105,50 +165,157 @@ class MainWindow(QtWidgets.QMainWindow):
         for dock in self._docks:
             view_menu.addAction(dock.toggleViewAction())
 
+        self.examples_menu = self.menuBar().addMenu("Примеры")
+        self.examples_menu.aboutToShow.connect(self._refresh_examples_menu)
+        self._refresh_examples_menu()
+
         settings_menu = self.menuBar().addMenu("Настройки")
         settings_menu.addAction("Путь к Tesseract OCR...", self.choose_tesseract_path)
 
-    def _build_context_menu(self):
-        graph_menu = self.graph.get_context_menu("graph")
-        if graph_menu is None:
+    def _refresh_examples_menu(self):
+        """Перечитывает папку examples/ при каждом открытии меню, чтобы новые
+        файлы появлялись без перезапуска приложения."""
+        self.examples_menu.clear()
+        if not os.path.isdir(EXAMPLES_DIR):
+            action = self.examples_menu.addAction("Папка examples не найдена")
+            action.setEnabled(False)
             return
-        graph_menu.add_command("Удалить", self._delete_selected_nodes, shortcut="Del")
+        files = sorted(f for f in os.listdir(EXAMPLES_DIR) if f.lower().endswith(".json"))
+        if not files:
+            action = self.examples_menu.addAction("Нет примеров")
+            action.setEnabled(False)
+            return
+        for filename in files:
+            path = os.path.join(EXAMPLES_DIR, filename)
+            title = os.path.splitext(filename)[0]
+            self.examples_menu.addAction(title, lambda checked=False, p=path: self.open_graph(p))
 
     def _delete_selected_nodes(self, graph):
         nodes = graph.selected_nodes()
         if nodes:
             graph.delete_nodes(nodes)
 
-    def _seed_default_graph(self):
-        self.graph.create_node("automation.events.StartNode", name="Старт", pos=[0, 0])
+    # ---- вкладки ----
+    def _create_graph(self):
+        graph = NodeGraph()
+        graph.set_acyclic(False)
+        graph.register_nodes(ALL_NODES)
+        graph_menu = graph.get_context_menu("graph")
+        if graph_menu is not None:
+            graph_menu.add_command("Удалить", self._delete_selected_nodes, shortcut="Del")
+        return graph
+
+    def _add_graph_tab(self, title, seed_default=True):
+        graph = self._create_graph()
+        self._ensure_nodes_tree(graph)
+        if seed_default:
+            graph.create_node("automation.events.StartNode", name="Старт", pos=[0, 0])
+
+        properties_bin = PropertiesBinWidget(node_graph=graph)
+        self.properties_stack.addWidget(properties_bin)
+
+        tab = GraphTab(graph, properties_bin)
+        self._tab_data[graph.widget] = tab
+
+        index = self.tabs.addTab(graph.widget, title)
+        self.tabs.setCurrentIndex(index)
+        return tab
+
+    def _current_tab(self):
+        widget = self.tabs.currentWidget()
+        return self._tab_data.get(widget)
+
+    def _update_tab_title(self, tab):
+        index = self.tabs.indexOf(tab.graph.widget)
+        if index != -1:
+            title = os.path.splitext(os.path.basename(tab.session_path))[0] if tab.session_path else "Без имени"
+            self.tabs.setTabText(index, title)
+
+    def _close_tab(self, index):
+        widget = self.tabs.widget(index)
+        tab = self._tab_data.pop(widget, None)
+        if tab is None:
+            return
+        if tab.engine and tab.engine.isRunning():
+            tab.engine.stop()
+            tab.engine.wait(2000)
+        self.properties_stack.removeWidget(tab.properties_bin)
+        tab.properties_bin.deleteLater()
+        self.tabs.removeTab(index)
+        widget.deleteLater()
+        if self.tabs.count() == 0:
+            self.new_graph()
+
+    def _on_tab_changed(self, index):
+        tab = self._current_tab()
+        if tab is None:
+            return
+        self.properties_stack.setCurrentWidget(tab.properties_bin)
+        running = bool(tab.engine and tab.engine.isRunning())
+        self.run_action.setEnabled(not running)
+        self.stop_action.setEnabled(running)
+        self.status_label.setText("Выполняется..." if running else "Готово")
+
+    def _step_tab(self, delta):
+        count = self.tabs.count()
+        if count:
+            self.tabs.setCurrentIndex((self.tabs.currentIndex() + delta) % count)
+
+    def _undo(self):
+        tab = self._current_tab()
+        if tab:
+            tab.graph.undo_stack().undo()
+
+    def _redo(self):
+        tab = self._current_tab()
+        if tab:
+            tab.graph.undo_stack().redo()
 
     def _add_node(self, node_type):
+        tab = self._current_tab()
+        if tab is None:
+            return
         pos = list(self._next_node_pos)
         self._next_node_pos[1] += 120
-        self.graph.create_node(node_type, pos=pos)
+        tab.graph.create_node(node_type, pos=pos)
 
     # ---- операции с файлом графа ----
     def new_graph(self):
-        self.graph.clear_session()
-        self._session_path = None
-        self._seed_default_graph()
+        self._new_tab_counter += 1
+        title = "Без имени" if self._new_tab_counter == 1 else f"Без имени {self._new_tab_counter}"
+        self._add_graph_tab(title)
 
-    def open_graph(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Открыть граф", "", "Graph (*.json)")
-        if path:
-            self.graph.load_session(path)
-            self._session_path = path
+    def open_graph(self, path=None):
+        if not path:
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Открыть граф", "", "Graph (*.json)")
+        if not path:
+            return
+        title = os.path.splitext(os.path.basename(path))[0]
+        tab = self._add_graph_tab(title, seed_default=False)
+        tab.graph.load_session(path)
+        tab.session_path = path
 
     def save_graph(self):
-        if not self._session_path:
+        tab = self._current_tab()
+        if tab is None:
+            return
+        if not tab.session_path:
             return self.save_graph_as()
-        self.graph.save_session(self._session_path)
+        tab.graph.save_session(tab.session_path)
+        self.status_label.setText(f"Сохранено: {tab.session_path}")
 
     def save_graph_as(self):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Сохранить граф", "graph.json", "Graph (*.json)")
+        tab = self._current_tab()
+        if tab is None:
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Сохранить граф", tab.session_path or "graph.json", "Graph (*.json)"
+        )
         if path:
-            self.graph.save_session(path)
-            self._session_path = path
+            tab.graph.save_session(path)
+            tab.session_path = path
+            self._update_tab_title(tab)
+            self.status_label.setText(f"Сохранено: {path}")
 
     def choose_tesseract_path(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -163,50 +330,58 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---- выполнение ----
     def start_run(self):
-        if self.engine and self.engine.isRunning():
+        tab = self._current_tab()
+        if tab is None or (tab.engine and tab.engine.isRunning()):
             return
-        self.log_view.clear()
-        self.engine = GraphEngine(self.graph)
-        self.engine.node_started.connect(self._on_node_started)
-        self.engine.node_finished.connect(self._on_node_finished)
-        self.engine.log_message.connect(self._on_log_message)
-        self.engine.run_finished.connect(self._on_run_finished)
+        title = self.tabs.tabText(self.tabs.indexOf(tab.graph.widget))
+        self.log_view.appendPlainText(f"--- [{title}] Запуск ---")
+
+        tab.engine = GraphEngine(tab.graph)
+        tab.engine.node_started.connect(lambda node_id, t=tab: self._on_node_started(t, node_id))
+        tab.engine.node_finished.connect(lambda node_id, t=tab: self._on_node_finished(t, node_id))
+        tab.engine.log_message.connect(lambda message, t=tab: self._on_log_message(t, message))
+        tab.engine.run_finished.connect(lambda t=tab: self._on_run_finished(t))
 
         self.run_action.setEnabled(False)
         self.stop_action.setEnabled(True)
         self.status_label.setText("Выполняется...")
-        self.engine.start()
+        tab.engine.start()
 
     def stop_run(self):
-        if self.engine:
-            self.engine.stop()
+        tab = self._current_tab()
+        if tab and tab.engine:
+            tab.engine.stop()
             self.status_label.setText("Остановка...")
 
-    def _on_node_started(self, node_id):
-        node = self.graph.get_node_by_id(node_id)
+    def _on_node_started(self, tab, node_id):
+        node = tab.graph.get_node_by_id(node_id)
         if node is None:
             return
-        self._node_colors[node_id] = node.color()
+        tab.node_colors[node_id] = node.color()
         node.set_color(*RUNNING_COLOR)
 
-    def _on_node_finished(self, node_id):
-        node = self.graph.get_node_by_id(node_id)
+    def _on_node_finished(self, tab, node_id):
+        node = tab.graph.get_node_by_id(node_id)
         if node is None:
             return
-        original = self._node_colors.pop(node_id, None)
+        original = tab.node_colors.pop(node_id, None)
         if original is not None:
             node.set_color(*original)
 
-    def _on_log_message(self, message):
-        self.log_view.appendPlainText(message)
+    def _on_log_message(self, tab, message):
+        title = self.tabs.tabText(self.tabs.indexOf(tab.graph.widget))
+        self.log_view.appendPlainText(f"[{title}] {message}")
 
-    def _on_run_finished(self):
-        self.run_action.setEnabled(True)
-        self.stop_action.setEnabled(False)
-        self.status_label.setText("Готово")
+    def _on_run_finished(self, tab):
+        if self._current_tab() is tab:
+            self.run_action.setEnabled(True)
+            self.stop_action.setEnabled(False)
+            self.status_label.setText("Готово")
 
     def closeEvent(self, event):
-        if self.engine and self.engine.isRunning():
-            self.engine.stop()
-            self.engine.wait(2000)
+        for index in range(self.tabs.count()):
+            tab = self._tab_data.get(self.tabs.widget(index))
+            if tab and tab.engine and tab.engine.isRunning():
+                tab.engine.stop()
+                tab.engine.wait(2000)
         super().closeEvent(event)

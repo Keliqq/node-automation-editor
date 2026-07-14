@@ -21,7 +21,7 @@ class ClickNode(ExecNode):
     def execute(self, engine):
         x = int(engine.get_input_value(self, "x") or 0)
         y = int(engine.get_input_value(self, "y") or 0)
-        button = _BUTTON_BY_LABEL.get(self.get_property("кнопка"), "left")
+        button = _BUTTON_BY_LABEL.get(str(self.get_property("кнопка")), "left")
         pyautogui.click(x=x, y=y, button=button)
         engine.log_message.emit(f"Клик ({x}, {y}) [{button}]")
         return "выход"
