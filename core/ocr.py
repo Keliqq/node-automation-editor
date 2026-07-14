@@ -53,7 +53,7 @@ def apply_tesseract_path():
 apply_tesseract_path()
 
 
-def read_text(image_rgb, digits_only=False, lang="eng"):
+def read_text(image_rgb, digits_only=False, lang="rus+eng"):
     """Распознаёт текст на небольшом кадре экрана (RGB-массив numpy).
     Мелкий HUD-шрифт сначала увеличивается (Tesseract нужны символы
     примерно от 30 px в высоту); увеличение уже читаемого текста только

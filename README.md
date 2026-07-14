@@ -19,6 +19,7 @@ The UI is currently in Russian; node/category names are easy to translate if you
 
 - Python 3.12+
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed, if you want to use the "Прочитать текст с экрана" (OCR) node. On Windows it's auto-detected in the default install location; otherwise set the path via the app's Настройки → "Путь к Tesseract OCR..." menu.
+- The OCR node reads with `lang="rus+eng"`, so Tesseract's Russian language data (`rus.traineddata`) needs to be installed alongside the default `eng` one, or the node will log a language-not-found error instead of recognizing text.
 - If the window/process you're automating runs elevated (as Administrator) and the editor doesn't, Windows won't let the emergency-stop hotkey see keypresses over it (UIPI) — run the editor elevated too in that case.
 
 ## Setup
