@@ -1,4 +1,5 @@
-from core.exec_node import ExecNode
+from core.exec_node import DataNode, ExecNode
+from core.ports import BOOL_PORT_COLOR
 
 
 class IfElseNode(ExecNode):
@@ -69,3 +70,33 @@ class WaitNode(ExecNode):
         seconds = float(engine.get_input_value(self, "секунды") or 0)
         engine.sleep_interruptible(seconds)
         return "выход"
+
+
+class CompareNode(DataNode):
+    """Сравнивает два числа через выбранный оператор, результат — bool."""
+
+    __identifier__ = "automation.flow"
+    NODE_NAME = "Сравнить числа"
+
+    def __init__(self):
+        super().__init__()
+        self.add_data_input("значение", dtype="float", default=0)
+        self.add_data_input("с_чем", dtype="float", default=0)
+        self.add_combo_menu("операция", "Операция:", items=[">", "<", ">=", "<=", "==", "!="])
+        self.add_data_output("результат", color=BOOL_PORT_COLOR)
+        self.set_color(95, 95, 140)
+
+    _OPS = {
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+    }
+
+    def compute(self, engine):
+        value = float(engine.get_input_value(self, "значение") or 0)
+        other = float(engine.get_input_value(self, "с_чем") or 0)
+        op = self.get_property("операция") or ">"
+        return {"результат": self._OPS.get(op, self._OPS[">"])(value, other)}
