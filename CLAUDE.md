@@ -51,6 +51,10 @@ Both share `add_data_input`/`add_data_output`, which back a node property (shown
 
 "Добавить узел" → "Обновить список нод" in the app re-runs discovery, extends `ALL_NODES`, registers only the newly-found classes into every currently-open tab's graph (`register_nodes` raises if a type is already registered, so already-known nodes must be filtered out first), and rebuilds the node palette/menu — all without restarting the app.
 
+### Emergency-stop hotkey (`core/hotkeys.py`)
+
+A global hotkey (default `F9`, stored via `QSettings`, changeable in Настройки) stops every running tab's engine at once, even when the app isn't focused — the whole point of a panic button, since the automation itself may be driving the mouse/keyboard over some other window. The `keyboard` library's hook callback runs on its own non-Qt thread, so the callback is just `emergency_stop_requested.emit()`; the actual stop logic (`MainWindow._stop_all_engines`) runs on the GUI thread via the normal cross-thread signal/slot queued connection — don't touch widgets or `_tab_data` directly from the hotkey callback. Windows UIPI means this can't see keypresses over a higher-privileged (elevated) foreground window unless the editor is elevated too.
+
 ### Screen/vision layer
 
 - `core/screen.py` — `mss`-based capture; monitor coordinates can be negative (multi-monitor virtual desktop), so don't assume `x`/`y` >= 0.

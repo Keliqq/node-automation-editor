@@ -13,11 +13,13 @@ The UI is currently in Russian; node/category names are easy to translate if you
 - **Tabs** — each open graph is its own tab (own undo stack, own run engine), like a browser.
 - **Examples menu** — anything dropped into `examples/` shows up in the app's "Примеры" menu, ready to open.
 - **Plugin nodes** — drop a `.py` file into `user_nodes/` with a class inheriting `ExecNode`/`DataNode`, then hit "Обновить список нод" — no rebuild, no editing the core codebase. See `user_nodes/example_beep_node.py` for a template.
+- **Emergency-stop hotkey** — global hotkey (default `F9`, changeable via Настройки → "Хоткей аварийной остановки...") that stops every running graph in every tab, even while the app doesn't have focus — useful since the automation itself is moving your mouse/keyboard.
 
 ## Requirements
 
 - Python 3.12+
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed, if you want to use the "Прочитать текст с экрана" (OCR) node. On Windows it's auto-detected in the default install location; otherwise set the path via the app's Настройки → "Путь к Tesseract OCR..." menu.
+- If the window/process you're automating runs elevated (as Administrator) and the editor doesn't, Windows won't let the emergency-stop hotkey see keypresses over it (UIPI) — run the editor elevated too in that case.
 
 ## Setup
 

@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import core.nodegraphqt_patches  # noqa: F401  чинит числовые виджеты NodeGraphQt до их использования
 from core.engine import GraphEngine
+from core.hotkeys import HotkeyManager, get_stop_hotkey, set_stop_hotkey
 from core.ocr import get_tesseract_path, set_tesseract_path
 from nodes import ALL_NODES
 
@@ -35,6 +36,8 @@ class GraphTab:
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    emergency_stop_requested = QtCore.Signal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Node Automation Editor")
@@ -49,6 +52,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._build_menu()
         self.new_graph()
+
+        # Хоткей ставится колбэком, который зовёт keyboard из СВОЕГО потока —
+        # поэтому колбэк только эмитит сигнал, а реальная остановка (_stop_all_engines)
+        # выполняется в GUI-потоке через обычное подключение сигнал/слот.
+        self._hotkey_manager = HotkeyManager(self.emergency_stop_requested.emit)
+        self.emergency_stop_requested.connect(self._stop_all_engines)
+        self._apply_stop_hotkey(get_stop_hotkey())
 
     # ---- построение интерфейса ----
     def _build_ui(self):
@@ -168,6 +178,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         settings_menu = self.menuBar().addMenu("Настройки")
         settings_menu.addAction("Путь к Tesseract OCR...", self.choose_tesseract_path)
+        settings_menu.addAction("Хоткей аварийной остановки...", self.choose_stop_hotkey)
 
     def _populate_nodes_menu(self):
         self.nodes_menu.clear()
@@ -364,6 +375,45 @@ class MainWindow(QtWidgets.QMainWindow):
             set_tesseract_path(path)
             self.status_label.setText("Путь к Tesseract OCR обновлён")
 
+    def choose_stop_hotkey(self):
+        current = get_stop_hotkey()
+        text, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Хоткей аварийной остановки",
+            "Комбинация клавиш (например: f9, ctrl+alt+q):",
+            text=current,
+        )
+        if not ok or not text.strip():
+            return
+        self._apply_stop_hotkey(text.strip().lower(), persist=True)
+
+    def _apply_stop_hotkey(self, hotkey, persist=False):
+        try:
+            self._hotkey_manager.apply(hotkey)
+        except RuntimeError as exc:
+            QtWidgets.QMessageBox.warning(self, "Хоткей", str(exc))
+            self.log_view.appendPlainText(f"[Хоткей] {exc}")
+            return
+        if persist:
+            set_stop_hotkey(hotkey)
+        self.status_label.setText(f"Хоткей аварийной остановки: {hotkey.upper()}")
+
+    def _stop_all_engines(self):
+        """Аварийная остановка по глобальному хоткею — глушит все запущенные
+        вкладки разом, а не только активную: с фокусом не на редакторе
+        пользователь не может выбрать «нужную» вкладку."""
+        running_tabs = [tab for tab in self._tab_data.values() if tab.engine and tab.engine.isRunning()]
+        for tab in running_tabs:
+            tab.engine.stop()
+        if not running_tabs:
+            return
+        self.log_view.appendPlainText(f"--- Аварийная остановка (хоткей) — вкладок: {len(running_tabs)} ---")
+        self.status_label.setText("Остановка (хоткей)...")
+        current = self._current_tab()
+        if current in running_tabs:
+            self.run_action.setEnabled(False)
+            self.stop_action.setEnabled(True)
+
     # ---- выполнение ----
     def start_run(self):
         tab = self._current_tab()
@@ -415,6 +465,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.status_label.setText("Готово")
 
     def closeEvent(self, event):
+        self._hotkey_manager.unregister()
         for index in range(self.tabs.count()):
             tab = self._tab_data.get(self.tabs.widget(index))
             if tab and tab.engine and tab.engine.isRunning():
