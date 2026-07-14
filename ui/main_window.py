@@ -37,7 +37,7 @@ class GraphTab:
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Редактор нод для автоматизации игр")
+        self.setWindowTitle("Node Automation Editor")
         self.resize(1400, 900)
 
         self._next_node_pos = [300, 0]

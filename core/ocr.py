@@ -11,7 +11,7 @@ import cv2
 import pytesseract
 from PySide6.QtCore import QSettings
 
-_SETTINGS_ORG = "GameAutomationNodeEditor"
+_SETTINGS_ORG = "NodeAutomationEditor"
 _SETTINGS_APP = "NodeEditor"
 _SETTINGS_KEY = "tesseract_path"
 
