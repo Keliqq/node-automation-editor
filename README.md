@@ -11,6 +11,7 @@ The UI is currently in Russian; node/category names are easy to translate if you
 - **Variables & functions** — set/increment/read run-scoped variables shared by all chains; wrap a reusable chain in a "Функция" node and run it from anywhere with "Вызвать функцию".
 - **Debugger** — pause, step one node at a time (⏭ also starts a run in step mode), and toggle breakpoints on selected nodes with `F8` (red border).
 - **Screen vision** — find an image on screen (optionally restricted to a region, grayscale for speed), wait for an image with a timeout, sample a pixel's color, or OCR text/numbers out of a screen region (via Tesseract).
+- **AI template maker** — "Создать с помощью ИИ..." on the image-search nodes: describe the object in words, the app takes a screenshot, a vision model finds the object, you adjust the box in a preview and save the PNG template. Works with Claude (Anthropic API key) or any OpenAI-compatible server — OpenAI, OpenRouter, or a local LM Studio/Ollama vision model (Настройки → Настройки ИИ). Only used at setup time — the running graph still matches with plain OpenCV.
 - **Region picker** — drag-select a screen region directly instead of typing coordinates.
 - **Mouse/keyboard actions** — click, move mouse, press a key, type text (including Cyrillic). A click with no coordinates (e.g. the image wasn't found) stops the branch instead of clicking the screen corner.
 - **Unsaved-changes guard** — modified tabs are marked with `*` and you're asked to save before closing.

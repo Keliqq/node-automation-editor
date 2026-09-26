@@ -7,3 +7,5 @@ Pillow
 pytesseract
 mss
 keyboard
+anthropic
+openai

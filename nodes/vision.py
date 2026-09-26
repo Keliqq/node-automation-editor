@@ -3,7 +3,9 @@ import time
 
 import cv2
 import numpy as np
+from PySide6 import QtWidgets
 
+from core.ai_template_dialog import create_template_with_ai
 from core.exec_node import DataNode, ExecNode
 from core.ports import BOOL_PORT_COLOR
 from core.region_selector import select_region
@@ -76,6 +78,11 @@ class _ImageSearchMixin:
 
     def _add_search_inputs(self):
         self.add_data_input("путь_к_шаблону", dtype="file", default="")
+        self.add_button("ии_шаблон", "Шаблон:", "Создать с помощью ИИ...")
+        widget = self.get_widget("ии_шаблон")
+        if widget is not None:
+            widget.value_changed.connect(self._on_create_template_with_ai)
+        self._ai_description = ""
         self.add_data_input("точность", dtype="float", default=0.85)
         monitor_labels, self._monitor_index_by_label = _monitor_combo_items()
         self.add_combo_menu("монитор", "Монитор", items=monitor_labels)
@@ -95,6 +102,17 @@ class _ImageSearchMixin:
         result = select_region()
         if result and len(result) == 4:
             self.set_property("область", ",".join(str(v) for v in result))
+            self.view.draw_node()
+
+    def _on_create_template_with_ai(self, *args):
+        monitor_label_value = self.get_property("монитор") or _ALL_MONITORS_LABEL
+        monitor_index = self._monitor_index_by_label.get(monitor_label_value, MONITOR_ALL)
+        result = create_template_with_ai(
+            QtWidgets.QApplication.activeWindow(), monitor_index, self._ai_description
+        )
+        if result:
+            path, self._ai_description = result
+            self.set_property("путь_к_шаблону", path)
             self.view.draw_node()
 
     def _search(self, engine):

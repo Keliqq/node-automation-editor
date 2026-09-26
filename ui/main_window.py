@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import core.nodegraphqt_patches  # noqa: F401  чинит числовые виджеты NodeGraphQt до их использования
 from core.app_paths import APP_ROOT
 from core.engine import GraphEngine
+from core.ai_template_dialog import edit_ai_settings
 from core.hotkeys import HotkeyManager, get_stop_hotkey, set_stop_hotkey
 from core.exec_node import ExecNode
 from core.ocr import get_tesseract_path, set_tesseract_path
@@ -199,6 +200,7 @@ class MainWindow(QtWidgets.QMainWindow):
         settings_menu = self.menuBar().addMenu("Настройки")
         settings_menu.addAction("Путь к Tesseract OCR...", self.choose_tesseract_path)
         settings_menu.addAction("Хоткей аварийной остановки...", self.choose_stop_hotkey)
+        settings_menu.addAction("Настройки ИИ (для ИИ-шаблонов)...", self.choose_ai_settings)
 
     def _populate_nodes_menu(self):
         self.nodes_menu.clear()
@@ -463,6 +465,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             set_tesseract_path(path)
             self.status_label.setText("Путь к Tesseract OCR обновлён")
+
+    def choose_ai_settings(self):
+        if edit_ai_settings(self):
+            self.status_label.setText("Настройки ИИ сохранены")
 
     def choose_stop_hotkey(self):
         current = get_stop_hotkey()
