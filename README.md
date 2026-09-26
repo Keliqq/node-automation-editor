@@ -7,9 +7,13 @@ The UI is currently in Russian; node/category names are easy to translate if you
 ## Features
 
 - **Visual exec graph** — connect nodes with exec pins; loops are just exec connections that loop back, no special "loop" runtime needed.
-- **Screen vision** — find an image on screen, sample a pixel's color, or OCR text/numbers out of a screen region (via Tesseract).
+- **Parallel start chains** — every "Старт" node runs as its own concurrent chain, so an endless loop in one doesn't block the others.
+- **Variables & functions** — set/increment/read run-scoped variables shared by all chains; wrap a reusable chain in a "Функция" node and run it from anywhere with "Вызвать функцию".
+- **Debugger** — pause, step one node at a time (⏭ also starts a run in step mode), and toggle breakpoints on selected nodes with `F8` (red border).
+- **Screen vision** — find an image on screen (optionally restricted to a region, grayscale for speed), wait for an image with a timeout, sample a pixel's color, or OCR text/numbers out of a screen region (via Tesseract).
 - **Region picker** — drag-select a screen region directly instead of typing coordinates.
-- **Mouse/keyboard actions** — click, move mouse, press a key, type text.
+- **Mouse/keyboard actions** — click, move mouse, press a key, type text (including Cyrillic). A click with no coordinates (e.g. the image wasn't found) stops the branch instead of clicking the screen corner.
+- **Unsaved-changes guard** — modified tabs are marked with `*` and you're asked to save before closing.
 - **Tabs** — each open graph is its own tab (own undo stack, own run engine), like a browser.
 - **Examples menu** — anything dropped into `examples/` shows up in the app's "Примеры" menu, ready to open.
 - **Plugin nodes** — drop a `.py` file into `user_nodes/` with a class inheriting `ExecNode`/`DataNode`, then hit "Обновить список нод" — no rebuild, no editing the core codebase. See `user_nodes/example_beep_node.py` for a template.
@@ -31,15 +35,23 @@ pip install -r requirements.txt
 python main.py
 ```
 
+Tests (engine, flow, variables, functions, pause/step — no real mouse/screen needed except where noted):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
 > `requirements.txt` pins `setuptools<81` — newer setuptools dropped `distutils`, which NodeGraphQt still imports on Python 3.12+/3.13.
 
 ## Built-in nodes
 
 | Category | Node |
 | --- | --- |
-| События (Events) | Старт |
+| События (Events) | Старт, Функция, Вызвать функцию |
 | Логика (Flow) | Сравнить числа, Если / Иначе, Цикл Пока, Ждать |
-| Зрение (Vision) | Найти картинку на экране, Цвет пикселя, Прочитать текст с экрана (OCR) |
+| Переменные (Variables) | Задать переменную, Увеличить переменную, Получить переменную |
+| Зрение (Vision) | Найти картинку на экране, Ждать картинку, Цвет пикселя, Прочитать текст с экрана (OCR) |
 | Действия (Actions) | Клик, Переместить мышь, Нажать клавишу, Ввести текст |
 | Отладка (Debug) | Вывести в консоль |
 
@@ -48,6 +60,7 @@ python main.py
 1. Add a `.py` file to `user_nodes/` (filenames starting with `_` are ignored).
 2. Subclass `ExecNode` (has exec-in/exec-out pins, runs as a step in the flow) or `DataNode` (pure value, recomputed lazily when read).
 3. Set `__identifier__` (controls which category it's grouped under in the node panel) and `NODE_NAME`.
+   Read inputs with `engine.get_input_value(...)` and convert them with `core.values.to_int`/`to_float`/`to_bool` rather than `int(value or 0)`, so a real `0` isn't replaced by a default and a missing value isn't silently treated as `0`. If your node keeps state between executions, override `reset_runtime()`.
 4. In the app: "Добавить узел" → "Обновить список нод" to pick it up without restarting.
 
 A broken user node file is logged and skipped — it won't crash the app.

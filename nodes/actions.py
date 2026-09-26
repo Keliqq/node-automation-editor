@@ -1,8 +1,22 @@
 import pyautogui
 
 from core.exec_node import ExecNode
+from core.values import MissingValueError, to_float, to_int
 
 _BUTTON_BY_LABEL = {"Левая": "left", "Правая": "right", "Средняя": "middle"}
+
+
+def _read_point(engine, node):
+    """Координаты x/y как int. Пустое значение — ошибка, а не (0, 0): обычно
+    это «Найти картинку», которая ничего не нашла, и клик в угол экрана
+    вместо остановки ветки был бы худшим из вариантов."""
+    try:
+        return (
+            to_int(engine.get_input_value(node, "x")),
+            to_int(engine.get_input_value(node, "y")),
+        )
+    except MissingValueError:
+        raise MissingValueError("координаты не заданы (картинка не найдена?) — ветка остановлена") from None
 
 
 class ClickNode(ExecNode):
@@ -19,8 +33,7 @@ class ClickNode(ExecNode):
         self.set_color(140, 95, 60)
 
     def execute(self, engine):
-        x = int(engine.get_input_value(self, "x") or 0)
-        y = int(engine.get_input_value(self, "y") or 0)
+        x, y = _read_point(engine, self)
         button = _BUTTON_BY_LABEL.get(str(self.get_property("кнопка")), "left")
         pyautogui.click(x=x, y=y, button=button)
         engine.log_message.emit(f"Клик ({x}, {y}) [{button}]")
@@ -41,9 +54,8 @@ class MoveMouseNode(ExecNode):
         self.set_color(140, 95, 60)
 
     def execute(self, engine):
-        x = int(engine.get_input_value(self, "x") or 0)
-        y = int(engine.get_input_value(self, "y") or 0)
-        duration = float(engine.get_input_value(self, "длительность") or 0)
+        x, y = _read_point(engine, self)
+        duration = to_float(engine.get_input_value(self, "длительность"), default=0)
         pyautogui.moveTo(x, y, duration=duration)
         return "выход"
 
@@ -60,7 +72,7 @@ class KeyPressNode(ExecNode):
         self.set_color(140, 95, 60)
 
     def execute(self, engine):
-        key = engine.get_input_value(self, "клавиша") or ""
+        key = str(engine.get_input_value(self, "клавиша") or "").strip()
         if key:
             pyautogui.press(key)
             engine.log_message.emit(f"Клавиша: {key}")
@@ -68,6 +80,10 @@ class KeyPressNode(ExecNode):
 
 
 class TypeTextNode(ExecNode):
+    """Печатает текст. Через ``keyboard.write``, а не ``pyautogui.typewrite``:
+    последний умеет только ASCII и молча пропускает кириллицу, а
+    ``keyboard`` шлёт символы вне текущей раскладки как Unicode-ввод."""
+
     __identifier__ = "automation.actions"
     NODE_NAME = "Ввести текст"
 
@@ -80,7 +96,15 @@ class TypeTextNode(ExecNode):
         self.set_color(140, 95, 60)
 
     def execute(self, engine):
-        text = engine.get_input_value(self, "текст") or ""
-        interval = float(engine.get_input_value(self, "интервал") or 0)
-        pyautogui.typewrite(text, interval=interval)
+        import keyboard
+
+        value = engine.get_input_value(self, "текст")
+        text = "" if value is None else str(value)
+        interval = to_float(engine.get_input_value(self, "интервал"), default=0)
+        for char in text:
+            if engine.is_stopping():
+                break
+            keyboard.write(char)
+            if interval > 0:
+                engine.sleep_interruptible(interval)
         return "выход"

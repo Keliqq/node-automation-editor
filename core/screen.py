@@ -61,3 +61,10 @@ def read_pixel_rgb(x, y):
     with MSS() as sct:
         shot = sct.grab({"left": x, "top": y, "width": 1, "height": 1})
     return shot.pixel(0, 0)
+
+
+def grab_region_bgr(x, y, width, height):
+    """Как ``grab_region_rgb``, но в BGR — для OpenCV-поиска по шаблону."""
+    with MSS() as sct:
+        shot = sct.grab({"left": x, "top": y, "width": width, "height": height})
+    return cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR)

@@ -1,5 +1,6 @@
 from core.exec_node import DataNode, ExecNode
 from core.ports import BOOL_PORT_COLOR
+from core.values import to_bool, to_float, to_int
 
 
 class IfElseNode(ExecNode):
@@ -17,7 +18,7 @@ class IfElseNode(ExecNode):
         self.set_color(95, 95, 140)
 
     def execute(self, engine):
-        condition = bool(engine.get_input_value(self, "условие"))
+        condition = to_bool(engine.get_input_value(self, "условие"))
         return "истина" if condition else "ложь"
 
 
@@ -43,9 +44,13 @@ class WhileLoopNode(ExecNode):
         self._iterations = 0
         self.set_color(95, 95, 140)
 
+    def reset_runtime(self):
+        super().reset_runtime()
+        self._iterations = 0
+
     def execute(self, engine):
-        condition = bool(engine.get_input_value(self, "условие"))
-        max_iterations = int(engine.get_input_value(self, "макс_итераций") or 0)
+        condition = to_bool(engine.get_input_value(self, "условие"))
+        max_iterations = to_int(engine.get_input_value(self, "макс_итераций"), default=0)
         self._iterations += 1
         if condition and self._iterations <= max_iterations:
             return "тело_цикла"
@@ -67,7 +72,7 @@ class WaitNode(ExecNode):
         self.set_color(95, 95, 140)
 
     def execute(self, engine):
-        seconds = float(engine.get_input_value(self, "секунды") or 0)
+        seconds = to_float(engine.get_input_value(self, "секунды"), default=0)
         engine.sleep_interruptible(seconds)
         return "выход"
 
@@ -96,7 +101,14 @@ class CompareNode(DataNode):
     }
 
     def compute(self, engine):
-        value = float(engine.get_input_value(self, "значение") or 0)
-        other = float(engine.get_input_value(self, "с_чем") or 0)
+        value = engine.get_input_value(self, "значение")
+        other = engine.get_input_value(self, "с_чем")
+        try:
+            value, other = to_float(value), to_float(other)
+        except ValueError as exc:
+            # «нет значения» (OCR ничего не прочитал) — это не 0, поэтому
+            # сравнение просто ложно, а не «0 < 100 — истина».
+            engine.log_message.emit(f"[{self.name()}] сравнение пропущено: {exc}")
+            return {"результат": False}
         op = self.get_property("операция") or ">"
         return {"результат": self._OPS.get(op, self._OPS[">"])(value, other)}

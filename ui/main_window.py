@@ -8,16 +8,21 @@ import core.nodegraphqt_patches  # noqa: F401  чинит числовые ви�
 from core.app_paths import APP_ROOT
 from core.engine import GraphEngine
 from core.hotkeys import HotkeyManager, get_stop_hotkey, set_stop_hotkey
+from core.exec_node import ExecNode
 from core.ocr import get_tesseract_path, set_tesseract_path
+from core.ports import BREAKPOINT_PROP
 from nodes import ALL_NODES
 
 RUNNING_COLOR = (240, 200, 60)
+BREAKPOINT_BORDER_COLOR = (255, 50, 50, 255)
+DEFAULT_BORDER_COLOR = (74, 84, 85, 255)  # как у NodeGraphQt по умолчанию
 
 EXAMPLES_DIR = os.path.join(APP_ROOT, "examples")
 
 CATEGORY_LABELS = {
     "automation.events": "События",
     "automation.flow": "Логика",
+    "automation.variables": "Переменные",
     "automation.vision": "Зрение",
     "automation.actions": "Действия",
     "automation.debug": "Отладка",
@@ -27,12 +32,19 @@ CATEGORY_LABELS = {
 class GraphTab:
     """Состояние одной вкладки: свой граф, своя панель свойств, свой движок."""
 
-    def __init__(self, graph, properties_bin):
+    def __init__(self, graph, properties_bin, title):
         self.graph = graph
         self.properties_bin = properties_bin
+        self.title = title
         self.engine: Optional[GraphEngine] = None
         self.session_path: Optional[str] = None
         self.node_colors = {}
+
+    def is_modified(self):
+        return not self.graph.undo_stack().isClean()
+
+    def is_running(self):
+        return bool(self.engine and self.engine.isRunning())
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -96,9 +108,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_action = toolbar.addAction("▶ Запустить")
         self.run_action.triggered.connect(self.start_run)
 
+        self.pause_action = toolbar.addAction("⏸ Пауза")
+        self.pause_action.triggered.connect(self.pause_run)
+
+        self.step_action = toolbar.addAction("⏭ Шаг")
+        self.step_action.setToolTip("Выполнить одну ноду и остановиться (если не запущено — запуск по шагам)")
+        self.step_action.triggered.connect(self.step_run)
+
         self.stop_action = toolbar.addAction("⏹ Остановить")
         self.stop_action.triggered.connect(self.stop_run)
-        self.stop_action.setEnabled(False)
+
+        self._sync_run_actions()
 
         self.status_label = QtWidgets.QLabel("Готово")
         self.statusBar().addPermanentWidget(self.status_label)
@@ -242,6 +262,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if nodes:
             graph.delete_nodes(nodes)
 
+    # ---- точки останова ----
+    def _toggle_breakpoints(self, graph):
+        nodes = [n for n in graph.selected_nodes() if isinstance(n, ExecNode)]
+        if not nodes:
+            return
+        state = not all(n.get_property(BREAKPOINT_PROP) for n in nodes)
+        for node in nodes:
+            node.set_property(BREAKPOINT_PROP, state)
+
+    def _on_node_property_changed(self, node, name, value):
+        if name == BREAKPOINT_PROP:
+            self._apply_breakpoint_marker(node)
+
+    @staticmethod
+    def _apply_breakpoint_marker(node):
+        """Красная рамка вокруг ноды с точкой останова. Рамка — это чисто
+        вид (сама точка — свойство ноды), поэтому без записи в undo."""
+        color = BREAKPOINT_BORDER_COLOR if node.get_property(BREAKPOINT_PROP) else DEFAULT_BORDER_COLOR
+        node.set_property("border_color", color, push_undo=False)
+
     # ---- вкладки ----
     def _create_graph(self):
         graph = NodeGraph()
@@ -250,6 +290,8 @@ class MainWindow(QtWidgets.QMainWindow):
         graph_menu = graph.get_context_menu("graph")
         if graph_menu is not None:
             graph_menu.add_command("Удалить", self._delete_selected_nodes, shortcut="Del")
+            graph_menu.add_command("Точка останова вкл/выкл", self._toggle_breakpoints, shortcut="F8")
+        graph.property_changed.connect(self._on_node_property_changed)
         return graph
 
     def _add_graph_tab(self, title, seed_default=True):
@@ -258,11 +300,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if seed_default:
             graph.create_node("automation.events.StartNode", name="Старт", pos=[0, 0])
 
+        graph.undo_stack().clear()  # стартовая нода «Старт» — не несохранённое изменение
+
         properties_bin = PropertiesBinWidget(node_graph=graph)
         self.properties_stack.addWidget(properties_bin)
 
-        tab = GraphTab(graph, properties_bin)
+        tab = GraphTab(graph, properties_bin, title)
         self._tab_data[graph.widget] = tab
+        graph.undo_stack().cleanChanged.connect(lambda _clean, t=tab: self._on_clean_changed(t))
 
         index = self.tabs.addTab(graph.widget, title)
         self.tabs.setCurrentIndex(index)
@@ -273,16 +318,44 @@ class MainWindow(QtWidgets.QMainWindow):
         return self._tab_data.get(widget)
 
     def _update_tab_title(self, tab):
+        if tab.session_path:
+            tab.title = os.path.splitext(os.path.basename(tab.session_path))[0]
         index = self.tabs.indexOf(tab.graph.widget)
         if index != -1:
-            title = os.path.splitext(os.path.basename(tab.session_path))[0] if tab.session_path else "Без имени"
-            self.tabs.setTabText(index, title)
+            self.tabs.setTabText(index, tab.title + (" *" if tab.is_modified() else ""))
+
+    def _on_clean_changed(self, tab):
+        # QUndoStack шлёт cleanChanged и из своего деструктора — при закрытии
+        # вкладки/приложения виджеты к этому моменту уже могут быть удалены.
+        try:
+            self._update_tab_title(tab)
+        except RuntimeError:
+            pass
+
+    def _confirm_discard(self, tab):
+        """Спрашивает про несохранённые изменения. False — пользователь
+        передумал закрывать (или сохранение не удалось/отменено)."""
+        if not tab.is_modified():
+            return True
+        self.tabs.setCurrentWidget(tab.graph.widget)
+        buttons = QtWidgets.QMessageBox.StandardButton
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Несохранённые изменения",
+            f"Сохранить изменения в «{tab.title}»?",
+            buttons.Save | buttons.Discard | buttons.Cancel,
+            buttons.Save,
+        )
+        if answer == buttons.Save:
+            return self._save_tab(tab)
+        return answer == buttons.Discard
 
     def _close_tab(self, index):
         widget = self.tabs.widget(index)
-        tab = self._tab_data.pop(widget, None)
-        if tab is None:
+        tab = self._tab_data.get(widget)
+        if tab is None or not self._confirm_discard(tab):
             return
+        self._tab_data.pop(widget, None)
         if tab.engine and tab.engine.isRunning():
             tab.engine.stop()
             tab.engine.wait(2000)
@@ -298,10 +371,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if tab is None:
             return
         self.properties_stack.setCurrentWidget(tab.properties_bin)
-        running = bool(tab.engine and tab.engine.isRunning())
-        self.run_action.setEnabled(not running)
-        self.stop_action.setEnabled(running)
-        self.status_label.setText("Выполняется..." if running else "Готово")
+        self._sync_run_actions()
+        if not tab.is_running():
+            self.status_label.setText("Готово")
+        elif tab.engine.is_paused():
+            self.status_label.setText("Пауза")
+        else:
+            self.status_label.setText("Выполняется...")
 
     def _step_tab(self, delta):
         count = self.tabs.count()
@@ -341,28 +417,41 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = self._add_graph_tab(title, seed_default=False)
         tab.graph.load_session(path)
         tab.session_path = path
+        for node in tab.graph.all_nodes():
+            if isinstance(node, ExecNode):
+                self._apply_breakpoint_marker(node)
+        tab.graph.undo_stack().clear()
+        self._update_tab_title(tab)
 
     def save_graph(self):
         tab = self._current_tab()
-        if tab is None:
-            return
-        if not tab.session_path:
-            return self.save_graph_as()
-        tab.graph.save_session(tab.session_path)
-        self.status_label.setText(f"Сохранено: {tab.session_path}")
+        if tab is not None:
+            self._save_tab(tab)
 
     def save_graph_as(self):
         tab = self._current_tab()
-        if tab is None:
-            return
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Сохранить граф", tab.session_path or "graph.json", "Graph (*.json)"
-        )
-        if path:
+        if tab is not None:
+            self._save_tab(tab, ask_path=True)
+
+    def _save_tab(self, tab, ask_path=False):
+        """Returns: True, если граф действительно сохранён."""
+        path = tab.session_path
+        if ask_path or not path:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Сохранить граф", tab.session_path or f"{tab.title}.json", "Graph (*.json)"
+            )
+            if not path:
+                return False
+        try:
             tab.graph.save_session(path)
-            tab.session_path = path
-            self._update_tab_title(tab)
-            self.status_label.setText(f"Сохранено: {path}")
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Сохранение", f"Не удалось сохранить {path}:\n{exc}")
+            return False
+        tab.session_path = path
+        tab.graph.undo_stack().setClean()
+        self._update_tab_title(tab)
+        self.status_label.setText(f"Сохранено: {path}")
+        return True
 
     def choose_tesseract_path(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -409,29 +498,60 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.log_view.appendPlainText(f"--- Аварийная остановка (хоткей) — вкладок: {len(running_tabs)} ---")
         self.status_label.setText("Остановка (хоткей)...")
-        current = self._current_tab()
-        if current in running_tabs:
-            self.run_action.setEnabled(False)
-            self.stop_action.setEnabled(True)
+        self._sync_run_actions()
 
     # ---- выполнение ----
-    def start_run(self):
-        tab = self._current_tab()
-        if tab is None or (tab.engine and tab.engine.isRunning()):
-            return
-        title = self.tabs.tabText(self.tabs.indexOf(tab.graph.widget))
-        self.log_view.appendPlainText(f"--- [{title}] Запуск ---")
+    def _sync_run_actions(self):
+        tab = self._current_tab() if self._tab_data else None
+        running = bool(tab and tab.is_running())
+        paused = running and tab.engine.is_paused()
+        self.run_action.setText("▶ Продолжить" if paused else "▶ Запустить")
+        self.run_action.setEnabled(tab is not None and (not running or paused))
+        self.pause_action.setEnabled(running and not paused)
+        self.step_action.setEnabled(tab is not None and (not running or paused))
+        self.stop_action.setEnabled(running)
 
-        tab.engine = GraphEngine(tab.graph)
+    def start_run(self, start_paused=False):
+        tab = self._current_tab()
+        if tab is None:
+            return
+        if tab.is_running():
+            if tab.engine.is_paused():
+                tab.engine.resume()
+                self.status_label.setText("Выполняется...")
+                self._sync_run_actions()
+            return
+        suffix = " по шагам" if start_paused else ""
+        self.log_view.appendPlainText(f"--- [{tab.title}] Запуск{suffix} ---")
+
+        tab.engine = GraphEngine(tab.graph, start_paused=start_paused)
         tab.engine.node_started.connect(lambda node_id, t=tab: self._on_node_started(t, node_id))
         tab.engine.node_finished.connect(lambda node_id, t=tab: self._on_node_finished(t, node_id))
         tab.engine.log_message.connect(lambda message, t=tab: self._on_log_message(t, message))
+        tab.engine.paused.connect(lambda node_id, t=tab: self._on_paused(t, node_id))
+        tab.engine.resumed.connect(lambda t=tab: self._on_resumed(t))
         tab.engine.run_finished.connect(lambda t=tab: self._on_run_finished(t))
 
-        self.run_action.setEnabled(False)
-        self.stop_action.setEnabled(True)
         self.status_label.setText("Выполняется...")
         tab.engine.start()
+        self._sync_run_actions()
+
+    def pause_run(self):
+        tab = self._current_tab()
+        if tab and tab.is_running():
+            tab.engine.pause()
+            self.status_label.setText("Пауза перед следующей нодой...")
+            self._sync_run_actions()
+
+    def step_run(self):
+        tab = self._current_tab()
+        if tab is None:
+            return
+        if not tab.is_running():
+            self.start_run(start_paused=True)
+            return
+        tab.engine.step()
+        self.status_label.setText("Шаг...")
 
     def stop_run(self):
         tab = self._current_tab()
@@ -439,32 +559,56 @@ class MainWindow(QtWidgets.QMainWindow):
             tab.engine.stop()
             self.status_label.setText("Остановка...")
 
+    @staticmethod
+    def _set_color_silently(node, color):
+        """Подсветка выполняемой ноды — не правка графа: ``node.set_color``
+        пишет в undo-стек, и каждый прогон засорял бы «Отменить» и помечал
+        граф как изменённый."""
+        node.set_property("color", tuple(color[:3]) + (255,), push_undo=False)
+
     def _on_node_started(self, tab, node_id):
         node = tab.graph.get_node_by_id(node_id)
         if node is None:
             return
-        tab.node_colors[node_id] = node.color()
-        node.set_color(*RUNNING_COLOR)
+        # setdefault: при параллельных цепочках одна нода может «стартовать»
+        # повторно, пока ещё подсвечена, — исходный цвет не должен затереться жёлтым.
+        tab.node_colors.setdefault(node_id, node.color())
+        self._set_color_silently(node, RUNNING_COLOR)
 
     def _on_node_finished(self, tab, node_id):
         node = tab.graph.get_node_by_id(node_id)
-        if node is None:
-            return
         original = tab.node_colors.pop(node_id, None)
-        if original is not None:
-            node.set_color(*original)
+        if node is not None and original is not None:
+            self._set_color_silently(node, original)
+
+    def _on_paused(self, tab, node_id):
+        node = tab.graph.get_node_by_id(node_id)
+        name = node.name() if node is not None else node_id
+        self.log_view.appendPlainText(f"[{tab.title}] Пауза перед «{name}»")
+        if self._current_tab() is tab:
+            self.status_label.setText(f"Пауза: «{name}» (▶ — продолжить, ⏭ — шаг)")
+            self._sync_run_actions()
+
+    def _on_resumed(self, tab):
+        if self._current_tab() is tab:
+            self.status_label.setText("Выполняется...")
+            self._sync_run_actions()
 
     def _on_log_message(self, tab, message):
-        title = self.tabs.tabText(self.tabs.indexOf(tab.graph.widget))
-        self.log_view.appendPlainText(f"[{title}] {message}")
+        self.log_view.appendPlainText(f"[{tab.title}] {message}")
 
     def _on_run_finished(self, tab):
+        for node_id in list(tab.node_colors):  # на случай остановки посреди шага
+            self._on_node_finished(tab, node_id)
         if self._current_tab() is tab:
-            self.run_action.setEnabled(True)
-            self.stop_action.setEnabled(False)
             self.status_label.setText("Готово")
+            self._sync_run_actions()
 
     def closeEvent(self, event):
+        for tab in list(self._tab_data.values()):
+            if not self._confirm_discard(tab):
+                event.ignore()
+                return
         self._hotkey_manager.unregister()
         for index in range(self.tabs.count()):
             tab = self._tab_data.get(self.tabs.widget(index))

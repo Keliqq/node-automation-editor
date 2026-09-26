@@ -6,6 +6,7 @@ from core.exec_node import DataNode
 from core.ocr import read_text
 from core.region_selector import select_region
 from core.screen import grab_region_rgb
+from core.values import to_bool, to_int
 
 _NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 
@@ -53,11 +54,13 @@ class ReadTextFromScreenNode(DataNode):
             self.view.draw_node()
 
     def compute(self, engine):
-        x_val = int(self.get_property("x") or 0)
-        y_val = int(self.get_property("y") or 0)
-        width = int(self.get_property("ширина_области") or 0)
-        height = int(self.get_property("высота_области") or 0)
-        digits_only = bool(self.get_property("только_цифры"))
+        # Через engine, а не get_property — иначе провод, подключённый к x/y,
+        # молча игнорировался бы в пользу литерала в «Свойствах».
+        x_val = to_int(engine.get_input_value(self, "x"), default=0)
+        y_val = to_int(engine.get_input_value(self, "y"), default=0)
+        width = to_int(engine.get_input_value(self, "ширина_области"), default=0)
+        height = to_int(engine.get_input_value(self, "высота_области"), default=0)
+        digits_only = to_bool(self.get_property("только_цифры"))
         empty = {"текст": "", "число": None}
 
         if width <= 0 or height <= 0:

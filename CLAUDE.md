@@ -12,9 +12,14 @@ pip install -r requirements.txt
 
 # run
 python main.py
+
+# tests (offscreen Qt, no window)
+pip install -r requirements-dev.txt
+python -m pytest
+python -m pytest tests/test_engine.py::test_function_call_returns_to_caller   # single test
 ```
 
-There is no test suite yet — don't assume a `pytest`/`tox` command exists.
+Tests build a real `NodeGraph` under `QT_QPA_PLATFORM=offscreen` (`tests/conftest.py`) with a few test-only nodes (`RecordNode` appends to `engine.records`) and call `engine.run()` synchronously, or `engine.start()` + polling for threaded/pause tests. Never add tests that execute real `Клик`/`Ввести текст` without monkeypatching `pyautogui`/`keyboard` — they'd drive the developer's actual mouse and keyboard.
 
 `requirements.txt` pins `setuptools<81`: newer setuptools dropped `distutils`, which the vendored NodeGraphQt still imports on Python 3.12+/3.13. Don't remove that pin.
 
@@ -29,11 +34,19 @@ This is a PySide6 + [NodeGraphQt](https://github.com/jchanvfx/NodeGraphQt) visua
 - **`ExecNode`** — imperative nodes with exec-in/exec-out pins (`add_exec_input`/`add_exec_output`), driven by `GraphEngine`. `execute(engine)` performs a side effect and returns the name of the exec output port to follow next (or `None` to stop that branch).
 - **`DataNode`** — pure nodes with no exec pins (e.g. `FindImageOnScreenNode`, `ReadTextFromScreenNode`). `compute(engine)` is evaluated lazily, only when an `ExecNode` reads one of its outputs via `engine.get_input_value(...)`, and is cached per `(run_id, step_id)` so multiple reads within the same engine step see a consistent value instead of re-sampling the screen each time.
 
-Both share `add_data_input`/`add_data_output`, which back a node property (shown in the "Свойства" panel) *and* an input port — `engine.get_input_value(node, port)` (`core/engine.py`) falls back to the node's own property when the port isn't wired, so a data input works both as a literal and as a connectable value.
+Both share `add_data_input`/`add_data_output`, which back a node property (shown in the "Свойства" panel) *and* an input port — `engine.get_input_value(node, port)` (`core/engine.py`) falls back to the node's own property when the port isn't wired, so a data input works both as a literal and as a connectable value. Read inputs via the engine, not `self.get_property(...)`, or a wired value is silently ignored.
+
+Convert input values with `core/values.py` (`to_int`/`to_float`/`to_bool`), never `int(value or default)`: that pattern replaces a deliberate `0` with the default and turns a missing value (`None` from "Найти картинку" that found nothing) into `0` — which once made "Клик" hit the screen corner. `to_int(value)` without a default raises `MissingValueError`, which the engine logs and uses to stop the branch.
+
+Nodes with state that must not leak between runs (e.g. `WhileLoopNode._iterations`) override `reset_runtime()` and call `super()`; the engine calls it on every node at the start of a run. Every `ExecNode` also gets a `точка_останова` checkbox property (tab "Отладка", `BREAKPOINT_PROP` in `core/ports.py`).
 
 ### Execution engine (`core/engine.py`)
 
-`GraphEngine` is a `QThread` so long automation runs don't freeze the GUI and "Остановить" can interrupt between steps. `run()` finds every `StartNode` on the graph and walks each one's exec-output connections node-by-node (`_run_chain`) until a dead end. **Loops are just cyclic exec wiring** (e.g. `WhileLoopNode`'s "тело_цикла" output connected back upstream) — the engine has no special loop construct, it only ever follows one exec connection at a time.
+`GraphEngine` is a `QThread` so long automation runs don't freeze the GUI and "Остановить" can interrupt between steps. It is **one-shot**: a new engine is created per run, and its constructor (running on the GUI thread) snapshots all wiring into plain dicts (`_exec_next`, `_data_src`) plus the `FunctionNode` name table. The worker thread only walks that snapshot, never live NodeGraphQt ports, so the user can edit wires mid-run without racing the engine (edits apply from the next run). Property *values* are still read live. `run()` deliberately doesn't clear `_stop_event` — a stop issued before the thread starts must not be lost.
+
+Each `StartNode` is its own chain; with more than one, each runs on its own `threading.Thread` (inside the `QThread`) so an endless loop in one doesn't starve the others. Per-chain state (`chain_id`, `step_id`, call depth) lives in `threading.local`; `DataNode` caches per chain via `engine.cache_key()`. The only cross-chain state is variables (`get_variable`/`set_variable`/`update_variable`, lock-protected, scoped to one run). **Loops are just cyclic exec wiring** (e.g. `WhileLoopNode`'s "тело_цикла" output connected back upstream) — the engine has no special loop construct. **Functions** are the same idea: `CallFunctionNode` → `engine.call_function(name)` runs `_run_chain` from the matching `FunctionNode` synchronously and returns (depth-limited by `MAX_CALL_DEPTH`).
+
+Pause/step/breakpoints: before executing each node `_wait_if_paused` blocks on a `threading.Condition` while paused (set by `pause()`, `start_paused=True`, or the node's `точка_останова`); `step()` grants a one-node budget, `resume()` clears the pause, `stop()` wakes waiters. The engine emits `paused(node_id)`/`resumed()` for the toolbar. In the UI, run highlighting and the red breakpoint border use `set_property(..., push_undo=False)` — `node.set_color` pushes to the undo stack, which would pollute "Отменить" and mark the tab modified on every run. The tab's "modified" state (`*` in the title, save prompt on close) is just `not undo_stack().isClean()`.
 
 ### Tabs (`ui/main_window.py`)
 

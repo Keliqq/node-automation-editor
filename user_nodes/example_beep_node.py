@@ -15,6 +15,7 @@
 import winsound
 
 from core.exec_node import ExecNode
+from core.values import to_int
 
 
 class BeepNode(ExecNode):
@@ -30,8 +31,8 @@ class BeepNode(ExecNode):
         self.set_color(140, 95, 60)
 
     def execute(self, engine):
-        frequency = int(engine.get_input_value(self, "частота_гц") or 750)
-        duration = int(engine.get_input_value(self, "длительность_мс") or 200)
+        frequency = to_int(engine.get_input_value(self, "частота_гц"), default=750)
+        duration = to_int(engine.get_input_value(self, "длительность_мс"), default=200)
         winsound.Beep(max(37, min(frequency, 32767)), max(1, duration))
         engine.log_message.emit(f"Бип {frequency} Гц, {duration} мс")
         return "выход"
