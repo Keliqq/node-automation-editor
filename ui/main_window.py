@@ -7,6 +7,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import core.nodegraphqt_patches  # noqa: F401  чинит числовые виджеты NodeGraphQt до их использования
 from core.app_paths import APP_ROOT
 from core.engine import GraphEngine
+from core.ai_graph import apply_plan
+from core.ai_chat import AiChatWidget
 from core.ai_template_dialog import edit_ai_settings
 from core.hotkeys import HotkeyManager, get_stop_hotkey, set_stop_hotkey
 from core.exec_node import ExecNode
@@ -101,7 +103,17 @@ class MainWindow(QtWidgets.QMainWindow):
         log_dock.setWidget(self.log_view)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
-        self._docks = [palette_dock, properties_dock, log_dock]
+        self.ai_chat = AiChatWidget(lambda: ALL_NODES, self._build_ai_graph)
+        ai_dock = QtWidgets.QDockWidget("ИИ-ассистент", self)
+        ai_dock.setObjectName("ai_dock")
+        ai_dock.setWidget(self.ai_chat)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, ai_dock)
+        self.tabifyDockWidget(properties_dock, ai_dock)
+        properties_dock.raise_()
+        self.ai_dock = ai_dock
+        self._ai_tab = None  # вкладка, куда чат ИИ строит граф
+
+        self._docks = [palette_dock, properties_dock, ai_dock, log_dock]
 
         toolbar = QtWidgets.QToolBar("Выполнение")
         self.addToolBar(toolbar)
@@ -204,6 +216,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _populate_nodes_menu(self):
         self.nodes_menu.clear()
+        self.nodes_menu.addAction("ИИ-ассистент: собрать граф...", self.show_ai_assistant)
         self.nodes_menu.addAction("Обновить список нод (папка user_nodes)", self._refresh_user_nodes)
         self.nodes_menu.addSeparator()
         for node_cls in ALL_NODES:
@@ -465,6 +478,34 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             set_tesseract_path(path)
             self.status_label.setText("Путь к Tesseract OCR обновлён")
+
+    def show_ai_assistant(self):
+        self.ai_dock.show()
+        self.ai_dock.raise_()
+        self.ai_chat.setFocus()
+
+    def _tab_is_open(self, tab):
+        return tab is not None and tab in self._tab_data.values()
+
+    def _build_ai_graph(self, plan, catalog, template_paths):
+        """Строит план из чата ИИ. Повторное «Построить граф» в том же чате
+        заменяет граф в его вкладке (одним шагом отмены), а не плодит вкладки."""
+        tab = self._ai_tab if self._tab_is_open(self._ai_tab) else None
+        if tab is None:
+            tab = self._ai_tab = self._add_graph_tab("ИИ: граф", seed_default=False)
+        else:
+            self.tabs.setCurrentWidget(tab.graph.widget)
+        graph = tab.graph
+        graph.begin_undo("ИИ: построить граф")
+        try:
+            graph.delete_nodes(graph.all_nodes())
+            apply_plan(graph, plan, catalog, template_paths)
+        finally:
+            graph.end_undo()
+        graph.fit_to_selection()  # ничего не выделено — охватит весь граф
+        self.log_view.appendPlainText(f"[ИИ] Граф построен: {plan.get('summary', '')}")
+        self.status_label.setText("Граф от ИИ построен — проверь его перед запуском")
+        return tab.title
 
     def choose_ai_settings(self):
         if edit_ai_settings(self):

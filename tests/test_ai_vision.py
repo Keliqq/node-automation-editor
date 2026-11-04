@@ -8,19 +8,27 @@ import openai
 import pytest
 
 from core.ai_vision import (
+    COORDS_AUTO,
+    COORDS_NORMALIZED,
+    COORDS_PIXELS,
     PROVIDER_ANTHROPIC,
     PROVIDER_OPENAI,
     AiVisionError,
+    ThinkSplitter,
+    coords_mode,
     count_matches,
     locate_object,
     parse_bbox_json,
     prepare_image,
+    stream_chat,
     to_image_bbox,
+    user_turn,
 )
 
 # Настройки передаются явно: иначе тест прочитал бы QSettings разработчика.
 ANTHROPIC = {"provider": PROVIDER_ANTHROPIC}
-OPENAI = {"provider": PROVIDER_OPENAI, "openai_model": "test-vl", "openai_max_side": 1000}
+OPENAI = {"provider": PROVIDER_OPENAI, "openai_model": "test-vl", "openai_max_side": 1000, "openai_coords": COORDS_PIXELS}
+OPENAI_AUTO = {**OPENAI, "openai_coords": COORDS_AUTO}
 
 
 class FakeAnthropic:
@@ -44,9 +52,9 @@ class FakeOpenAI:
     """То же для openai-клиента. ``reject_schema`` изображает сервер без
     structured output: запрос с response_format отвергается с 400."""
 
-    def __init__(self, content, reject_schema=False):
+    def __init__(self, *contents, reject_schema=False):
         self.requests = []
-        self._content = content
+        self._contents = list(contents)
         self._reject_schema = reject_schema
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
@@ -55,7 +63,9 @@ class FakeOpenAI:
         if self._reject_schema and "response_format" in kwargs:
             response = SimpleNamespace(status_code=400, headers={}, request=None)
             raise openai.BadRequestError("response_format not supported", response=response, body=None)
-        message = SimpleNamespace(content=self._content, refusal=None)
+        # Ответы по очереди; последний повторяется.
+        content = self._contents.pop(0) if len(self._contents) > 1 else self._contents[0]
+        message = SimpleNamespace(content=content, refusal=None)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
@@ -136,9 +146,55 @@ def test_openai_normalized_coordinates():
     screen = np.zeros((1000, 2000, 3), np.uint8)
     client = FakeOpenAI('{"found": true, "x": 500, "y": 100, "width": 10, "height": 20, "note": ""}')
 
-    bbox, _ = locate_object(screen, "облако", client=client, settings={**OPENAI, "openai_normalized": True})
+    bbox, _ = locate_object(screen, "облако", client=client, settings={**OPENAI, "openai_coords": COORDS_NORMALIZED})
 
     assert bbox == (1000, 100, 20, 20)
+    assert "0..1000" in client.requests[0]["messages"][1]["content"][1]["text"]
+
+
+def bbox_json(x, y, w, h):
+    return json.dumps({"found": True, "x": x, "y": y, "width": w, "height": h, "note": ""})
+
+
+def test_auto_coords_decides_pixels_without_asking_when_numbers_exceed_1000():
+    screen = np.zeros((1000, 3000, 3), np.uint8)  # уйдёт как 1500x500
+    client = FakeOpenAI(bbox_json(1200, 10, 20, 10))
+    bbox, _ = locate_object(screen, "x", client=client, settings={**OPENAI_AUTO, "openai_max_side": 1500})
+    assert len(client.requests) == 1
+    assert bbox == (2400, 20, 40, 20)
+
+
+# Картинка уходит как 1000x500: по x оба толкования совпадают, по y — нет.
+@pytest.mark.parametrize("choice, expected", [("A", (200, 100, 40, 20)), ("B", (200, 50, 40, 10))])
+def test_auto_coords_asks_model_to_pick_between_readings(choice, expected):
+    screen = np.zeros((1000, 2000, 3), np.uint8)  # уйдёт как 1000x500
+    client = FakeOpenAI(bbox_json(100, 50, 20, 10), json.dumps({"choice": choice, "note": ""}))
+
+    bbox, _ = locate_object(screen, "облако", client=client, settings=OPENAI_AUTO)
+
+    assert len(client.requests) == 2
+    comparison = _decode_openai_image(client.requests[1])
+    assert comparison.shape[0] == 360  # два фрагмента A/B с подписями в ряд
+    assert bbox == expected
+
+
+def test_auto_coords_none_means_not_found():
+    screen = np.zeros((1000, 2000, 3), np.uint8)
+    client = FakeOpenAI(bbox_json(100, 50, 20, 10), json.dumps({"choice": "none", "note": ""}))
+    bbox, note = locate_object(screen, "облако", client=client, settings=OPENAI_AUTO)
+    assert bbox is None and note
+
+
+def test_auto_coords_uses_mode_learned_for_this_model():
+    screen = np.zeros((1000, 2000, 3), np.uint8)
+    client = FakeOpenAI(bbox_json(100, 50, 20, 10))
+    settings = {**OPENAI_AUTO, "openai_coords_learned": "test-vl|normalized"}
+
+    bbox, _ = locate_object(screen, "облако", client=client, settings=settings)
+
+    assert len(client.requests) == 1
+    assert bbox == (200, 50, 40, 10)
+    assert coords_mode({**settings, "openai_model": "другая"}) == COORDS_AUTO
 
 
 def test_openai_retries_without_structured_output_and_parses_loose_json():
@@ -161,6 +217,71 @@ def test_openai_requires_model():
 def test_parse_bbox_json_rejects_garbage():
     with pytest.raises(AiVisionError):
         parse_bbox_json("не вижу тут облаков")
+
+
+@pytest.mark.parametrize("chunks", [["<think>думаю</think>ответ"], ["<thi", "nk>ду", "маю</th", "ink>отв", "ет"]])
+def test_think_splitter_handles_tags_split_across_chunks(chunks):
+    splitter = ThinkSplitter()
+    parts = [part for chunk in chunks for part in splitter.feed(chunk)] + splitter.flush()
+    joined = {kind: "".join(p for k, p in parts if k == kind) for kind in ("thinking", "text")}
+    assert joined == {"thinking": "думаю", "text": "ответ"}
+
+
+def test_think_splitter_passes_through_lone_angle_bracket():
+    splitter = ThinkSplitter()
+    parts = splitter.feed("x < 5 и y <") + splitter.flush()
+    assert "".join(p for _, p in parts) == "x < 5 и y <"
+
+
+class FakeOpenAIStream:
+    """Потоковый ответ openai: куски с content и, по желанию, отдельным
+    полем рассуждений reasoning_content (как у LM Studio)."""
+
+    def __init__(self, deltas):
+        self.requests = []
+        self._deltas = deltas
+        self.closed = False
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.requests.append(kwargs)
+        return self
+
+    def __iter__(self):
+        for delta in self._deltas:
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(**delta))])
+
+    def close(self):
+        self.closed = True
+
+
+def test_stream_chat_openai_routes_reasoning_and_think_tags():
+    client = FakeOpenAIStream(
+        [
+            {"content": None, "reasoning_content": "поле "},
+            {"content": "<think>тег</think>"},
+            {"content": "Привет"},
+            {"content": "!"},
+        ]
+    )
+    thinking, text = [], []
+
+    reply = stream_chat("sys", [user_turn("hi")], thinking.append, text.append, settings=OPENAI, client=client)
+
+    assert reply == "Привет!"
+    assert "".join(thinking) == "поле тег"
+    assert "".join(text) == "Привет!"
+    assert client.requests[0]["stream"] is True
+    assert client.requests[0]["messages"][0] == {"role": "system", "content": "sys"}
+    assert client.closed
+
+
+def test_stream_chat_openai_stops_on_request():
+    client = FakeOpenAIStream([{"content": "раз"}, {"content": "два"}])
+    seen = []
+    reply = stream_chat("s", [user_turn("hi")], seen.append, seen.append, lambda: bool(seen), OPENAI, client)
+    assert reply == "раз"
+    assert client.closed
 
 
 def test_count_matches_counts_each_copy_once():

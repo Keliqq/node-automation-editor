@@ -20,6 +20,8 @@ def _read_point(engine, node):
 
 
 class ClickNode(ExecNode):
+    """Кликает мышью в точку x, y экрана (например, по координатам из «Ждать картинку»)."""
+
     __identifier__ = "automation.actions"
     NODE_NAME = "Клик"
 
@@ -41,6 +43,8 @@ class ClickNode(ExecNode):
 
 
 class MoveMouseNode(ExecNode):
+    """Плавно переводит курсор в точку x, y экрана за «длительность» секунд, не кликая."""
+
     __identifier__ = "automation.actions"
     NODE_NAME = "Переместить мышь"
 
@@ -61,6 +65,8 @@ class MoveMouseNode(ExecNode):
 
 
 class KeyPressNode(ExecNode):
+    """Нажимает и отпускает одну клавишу (имена pyautogui: space, enter, esc, a, f5...); сочетания не поддерживает."""
+
     __identifier__ = "automation.actions"
     NODE_NAME = "Нажать клавишу"
 
@@ -80,7 +86,9 @@ class KeyPressNode(ExecNode):
 
 
 class TypeTextNode(ExecNode):
-    """Печатает текст. Через ``keyboard.write``, а не ``pyautogui.typewrite``:
+    """Печатает текст в активное окно, как с клавиатуры (кириллица тоже работает).
+
+    Через ``keyboard.write``, а не ``pyautogui.typewrite``:
     последний умеет только ASCII и молча пропускает кириллицу, а
     ``keyboard`` шлёт символы вне текущей раскладки как Unicode-ввод."""
 

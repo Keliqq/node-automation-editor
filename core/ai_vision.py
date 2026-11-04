@@ -10,14 +10,18 @@
   локальные LM Studio / Ollama / vLLM с vision-моделью (Qwen-VL и т.п.).
 
 Модели по-разному отдают координаты: Claude — в пикселях присланной картинки
-(в пределах своих лимитов), Qwen3-VL / Gemini — в долях 0..1000. Поэтому для
-OpenAI-совместимых размер картинки прописывается в запросе явно, а
-нормированные координаты включаются галочкой в настройках.
+(в пределах своих лимитов), Qwen3-VL / Gemini — в долях 0..1000, и никакая
+просьба в тексте запроса этого не меняет — так модель обучена. Поэтому для
+OpenAI-совместимых формат можно задать в настройках, а по умолчанию («авто»)
+он определяется по первому неоднозначному ответу: оба толкования рамки
+вырезаются и показываются модели — «где тут объект, A или B?» — и ответ
+запоминается для этой модели.
 """
 
 import base64
 import json
 import re
+from contextlib import contextmanager
 
 import cv2
 import numpy as np
@@ -47,8 +51,14 @@ DEFAULT_SETTINGS = {
     # Многие серверы (и сам OpenAI) всё равно ужимают картинку; лучше
     # ужать самим и назвать модели точный размер, чем гадать о чужом.
     "openai_max_side": 1536,
-    "openai_normalized": False,  # координаты 0..1000 (Qwen3-VL, Gemini)
+    "openai_coords": "auto",  # COORDS_*
+    # «модель|формат», определённый в режиме auto — чтобы не переспрашивать.
+    "openai_coords_learned": "",
 }
+
+COORDS_AUTO = "auto"
+COORDS_PIXELS = "pixels"
+COORDS_NORMALIZED = "normalized"  # доли 0..1000 (Qwen3-VL, Gemini)
 
 _SYSTEM_PROMPT = """\
 Ты помогаешь настроить бота для автоматизации: по скриншоту и описанию нужно \
@@ -102,6 +112,10 @@ def get_ai_settings():
         else:
             value = str(value or "")
         result[key] = value
+    # Раньше вместо openai_coords была галочка openai_normalized.
+    if not store.contains(_SETTINGS_PREFIX + "openai_coords"):
+        if str(store.value(_SETTINGS_PREFIX + "openai_normalized", "")).lower() == "true":
+            result["openai_coords"] = COORDS_NORMALIZED
     return result
 
 
@@ -146,10 +160,11 @@ def to_image_bbox(result, scale, image_width, image_height):
     return x0, y0, x1 - x0, y1 - y0
 
 
-def parse_bbox_json(text):
+def parse_json_object(text, required_key):
     """Достаёт JSON-ответ из текста модели. Локальные модели без поддержки
     structured output любят обернуть его в ```json или предварить
-    рассуждениями в <think>...</think>, поэтому ищем первый объект с found."""
+    рассуждениями в <think>...</think>, поэтому ищем первый объект с
+    ``required_key``."""
     text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
     decoder = json.JSONDecoder()
     for match in re.finditer(r"\{", text):
@@ -157,9 +172,13 @@ def parse_bbox_json(text):
             value, _ = decoder.raw_decode(text, match.start())
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict) and "found" in value:
+        if isinstance(value, dict) and required_key in value:
             return value
     raise AiVisionError(f"не удалось разобрать ответ модели: {text.strip()[:200]!r}")
+
+
+def parse_bbox_json(text):
+    return parse_json_object(text, "found")
 
 
 def _normalize_result(result):
@@ -177,41 +196,55 @@ def _normalize_result(result):
         raise AiVisionError(f"в ответе модели не числа: {result!r}") from exc
 
 
-def _ask_anthropic(png, description, settings, client):
+def user_turn(text, png=None):
+    """Ход диалога для ``ask_json``/``stream_chat``: текст и (необязательно)
+    PNG-картинка."""
+    return {"role": "user", "text": text, "png": png}
+
+
+def assistant_turn(text):
+    return {"role": "assistant", "text": text, "png": None}
+
+
+def _b64(png):
+    return base64.standard_b64encode(png).decode("ascii")
+
+
+# ---- Claude ----
+
+
+def _anthropic_module():
     try:
         import anthropic
     except ImportError as exc:
         raise AiVisionError("не установлен пакет anthropic (pip install -r requirements.txt)") from exc
+    return anthropic
 
-    if client is None:
-        key = settings["anthropic_api_key"]
-        client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+
+def _anthropic_client(settings, client):
+    if client is not None:
+        return client
+    anthropic = _anthropic_module()
+    key = settings["anthropic_api_key"]
+    return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+
+
+def _anthropic_messages(turns):
+    messages = []
+    for turn in turns:
+        content = []
+        if turn["png"] is not None:
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _b64(turn["png"])}})
+        content.append({"type": "text", "text": turn["text"]})
+        messages.append({"role": turn["role"], "content": content})
+    return messages
+
+
+@contextmanager
+def _anthropic_errors():
+    anthropic = _anthropic_module()
     try:
-        response = client.beta.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=16000,
-            system=_SYSTEM_PROMPT,
-            thinking={"type": "adaptive"},
-            output_config={"format": {"type": "json_schema", "schema": _BBOX_SCHEMA}},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": base64.standard_b64encode(png).decode("ascii"),
-                            },
-                        },
-                        {"type": "text", "text": f"Найди на скриншоте: {description}"},
-                    ],
-                }
-            ],
-        )
+        yield
     except anthropic.AuthenticationError as exc:
         raise AiVisionError("неверный ключ API Claude — проверь «Настройки» → «Настройки ИИ»") from exc
     except anthropic.RateLimitError as exc:
@@ -224,57 +257,106 @@ def _ask_anthropic(png, description, settings, client):
         # Клиент без ключа: SDK не нашёл ни настройки, ни ANTHROPIC_API_KEY.
         raise AiVisionError("не задан ключ API Claude — «Настройки» → «Настройки ИИ»") from exc
 
-    if response.stop_reason == "refusal":
-        raise AiVisionError("модель отказалась обрабатывать этот скриншот")
-    if response.stop_reason == "max_tokens":
+
+def _check_anthropic_stop(stop_reason):
+    if stop_reason == "refusal":
+        raise AiVisionError("модель отказалась выполнять запрос")
+    if stop_reason == "max_tokens":
         raise AiVisionError("ответ модели оборвался, попробуй ещё раз")
-    return parse_bbox_json(next((b.text for b in response.content if b.type == "text"), ""))
 
 
-def _ask_openai(png, description, settings, client, width, height):
+def _anthropic_params(system, turns):
+    return dict(
+        model=ANTHROPIC_MODEL,
+        system=system,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        messages=_anthropic_messages(turns),
+    )
+
+
+def _ask_anthropic(system, turns, schema, settings, client):
+    client = _anthropic_client(settings, client)
+    with _anthropic_errors():
+        response = client.beta.messages.create(
+            max_tokens=16000,
+            thinking={"type": "adaptive"},
+            output_config={"format": {"type": "json_schema", "schema": schema}},
+            **_anthropic_params(system, turns),
+        )
+    _check_anthropic_stop(response.stop_reason)
+    return next((b.text for b in response.content if b.type == "text"), "")
+
+
+def _stream_anthropic(system, turns, on_thinking, on_text, should_stop, settings, client):
+    client = _anthropic_client(settings, client)
+    text = []
+    with _anthropic_errors():
+        with client.beta.messages.stream(
+            max_tokens=64000,
+            # summarized — иначе у Claude текст рассуждений приходит пустым.
+            thinking={"type": "adaptive", "display": "summarized"},
+            **_anthropic_params(system, turns),
+        ) as stream:
+            for event in stream:
+                if should_stop():
+                    return "".join(text)
+                if event.type != "content_block_delta":
+                    continue
+                if event.delta.type == "thinking_delta":
+                    on_thinking(event.delta.thinking)
+                elif event.delta.type == "text_delta":
+                    text.append(event.delta.text)
+                    on_text(event.delta.text)
+            final = stream.get_final_message()
+    _check_anthropic_stop(final.stop_reason)
+    return "".join(text)
+
+
+# ---- OpenAI-совместимые ----
+
+
+def _openai_module():
     try:
         import openai
     except ImportError as exc:
         raise AiVisionError("не установлен пакет openai (pip install -r requirements.txt)") from exc
+    return openai
 
-    model = settings["openai_model"]
-    if not model:
+
+def _openai_client(settings, client):
+    if not settings["openai_model"]:
         raise AiVisionError("не задана модель — «Настройки» → «Настройки ИИ»")
-    if client is None:
-        client = openai.OpenAI(
-            base_url=settings["openai_base_url"] or None,
-            # Локальным серверам ключ не нужен, но SDK без него не создаётся.
-            api_key=settings["openai_api_key"] or "not-needed",
-        )
-
-    if settings["openai_normalized"]:
-        units = "Координаты — в долях 0..1000 от ширины и высоты изображения."
-    else:
-        units = f"Изображение {width}×{height} пикселей; координаты — в его пикселях, (0,0) — левый верхний угол."
-    request = dict(
-        model=model,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64," + base64.standard_b64encode(png).decode("ascii")},
-                    },
-                    {"type": "text", "text": f"Найди на скриншоте: {description}\n{units}"},
-                ],
-            },
-        ],
+    if client is not None:
+        return client
+    return _openai_module().OpenAI(
+        base_url=settings["openai_base_url"] or None,
+        # Локальным серверам ключ не нужен, но SDK без него не создаётся.
+        api_key=settings["openai_api_key"] or "not-needed",
     )
-    schema_format = {"type": "json_schema", "json_schema": {"name": "bbox", "schema": _BBOX_SCHEMA, "strict": True}}
+
+
+def _openai_messages(system, turns):
+    messages = [{"role": "system", "content": system}]
+    for turn in turns:
+        if turn["png"] is None:
+            messages.append({"role": turn["role"], "content": turn["text"]})
+            continue
+        url = "data:image/png;base64," + _b64(turn["png"])
+        messages.append(
+            {
+                "role": turn["role"],
+                "content": [{"type": "image_url", "image_url": {"url": url}}, {"type": "text", "text": turn["text"]}],
+            }
+        )
+    return messages
+
+
+@contextmanager
+def _openai_errors(model):
+    openai = _openai_module()
     try:
-        try:
-            response = client.chat.completions.create(response_format=schema_format, **request)
-        except openai.BadRequestError:
-            # Сервер не умеет structured output — просим JSON словами и
-            # разбираем как получится.
-            response = client.chat.completions.create(**request)
+        yield
     except openai.AuthenticationError as exc:
         raise AiVisionError("неверный ключ API — проверь «Настройки» → «Настройки ИИ»") from exc
     except openai.NotFoundError as exc:
@@ -286,16 +368,162 @@ def _ask_openai(png, description, settings, client, width, height):
     except openai.APIConnectionError as exc:
         raise AiVisionError("нет соединения с сервером — проверь адрес и что он запущен") from exc
 
+
+def _ask_openai(system, turns, schema, schema_name, settings, client):
+    openai = _openai_module()
+    client = _openai_client(settings, client)
+    model = settings["openai_model"]
+    messages = _openai_messages(system, turns)
+    schema_format = {"type": "json_schema", "json_schema": {"name": schema_name, "schema": schema, "strict": True}}
+    with _openai_errors(model):
+        try:
+            response = client.chat.completions.create(model=model, messages=messages, response_format=schema_format)
+        except openai.BadRequestError:
+            # Сервер не умеет structured output — просим JSON словами и
+            # разбираем как получится.
+            response = client.chat.completions.create(model=model, messages=messages)
+
     if not response.choices:
         raise AiVisionError("сервер вернул пустой ответ")
     message = response.choices[0].message
     if getattr(message, "refusal", None):
         raise AiVisionError(f"модель отказалась: {message.refusal}")
-    result = _normalize_result(parse_bbox_json(message.content or ""))
-    if settings["openai_normalized"]:
-        for key, size in (("x", width), ("width", width), ("y", height), ("height", height)):
-            result[key] = result[key] * size / 1000
-    return result
+    return message.content or ""
+
+
+class ThinkSplitter:
+    """Делит поток текста на рассуждения и ответ по тегам <think>...</think>.
+
+    Так рассуждения отдают Qwen/DeepSeek через LM Studio и Ollama, если
+    сервер не выносит их в отдельное поле. Тег может прийти разрезанным
+    между кусками потока («<thi» + «nk>»), поэтому хвост, похожий на начало
+    тега, придерживается до следующего куска.
+    """
+
+    _OPEN, _CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self._buffer = ""
+        self._thinking = False
+
+    def feed(self, chunk):
+        """Returns: list[tuple[str, str]] — ("thinking" | "text", кусок)."""
+        self._buffer += chunk
+        out = []
+        while True:
+            tag = self._CLOSE if self._thinking else self._OPEN
+            kind = "thinking" if self._thinking else "text"
+            index = self._buffer.find(tag)
+            if index >= 0:
+                if index:
+                    out.append((kind, self._buffer[:index]))
+                self._buffer = self._buffer[index + len(tag) :]
+                self._thinking = not self._thinking
+                continue
+            keep = next(
+                (k for k in range(min(len(tag) - 1, len(self._buffer)), 0, -1) if tag.startswith(self._buffer[-k:])),
+                0,
+            )
+            ready = self._buffer[: len(self._buffer) - keep]
+            if ready:
+                out.append((kind, ready))
+            self._buffer = self._buffer[len(ready) :]
+            return out
+
+    def flush(self):
+        rest, self._buffer = self._buffer, ""
+        return [("thinking" if self._thinking else "text", rest)] if rest else []
+
+
+def _stream_openai(system, turns, on_thinking, on_text, should_stop, settings, client):
+    client = _openai_client(settings, client)
+    model = settings["openai_model"]
+    splitter = ThinkSplitter()
+    text = []
+
+    def route(parts):
+        for kind, piece in parts:
+            if kind == "thinking":
+                on_thinking(piece)
+            else:
+                text.append(piece)
+                on_text(piece)
+
+    with _openai_errors(model):
+        stream = client.chat.completions.create(model=model, messages=_openai_messages(system, turns), stream=True)
+        try:
+            for chunk in stream:
+                if should_stop():
+                    break
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                # Отдельное поле рассуждений: reasoning_content (LM Studio,
+                # DeepSeek, vLLM) или reasoning (OpenRouter, Ollama).
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning:
+                    on_thinking(reasoning)
+                if delta.content:
+                    route(splitter.feed(delta.content))
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
+    route(splitter.flush())
+    return "".join(text)
+
+
+def resolve_settings(settings=None):
+    return {**DEFAULT_SETTINGS, **(settings if settings is not None else get_ai_settings())}
+
+
+def ask_json(system, turns, schema, schema_name, required_key, settings=None, client=None):
+    """Один запрос к выбранному провайдеру с ответом-JSON по ``schema``.
+
+    Блокирующий сетевой вызов — не вызывать из GUI-потока.
+
+    Args:
+        turns: ходы диалога (``user_turn``/``assistant_turn``), первый — user.
+        required_key: поле, по которому JSON узнаётся в «грязном» ответе.
+
+    Returns:
+        tuple[dict, str]: разобранный объект и сырой текст ответа.
+    """
+    settings = resolve_settings(settings)
+    if settings["provider"] == PROVIDER_OPENAI:
+        text = _ask_openai(system, turns, schema, schema_name, settings, client)
+    else:
+        text = _ask_anthropic(system, turns, schema, settings, client)
+    return parse_json_object(text, required_key), text
+
+
+def stream_chat(system, turns, on_thinking, on_text, should_stop=lambda: False, settings=None, client=None):
+    """Ответ модели в свободной форме, по кусочкам: рассуждения — в
+    ``on_thinking``, текст ответа — в ``on_text`` (вызываются из того же
+    потока, что и эта функция). ``should_stop()`` проверяется на каждом
+    куске — так кнопка «Стоп» обрывает генерацию.
+
+    Блокирующий сетевой вызов — не вызывать из GUI-потока.
+
+    Returns:
+        str: весь текст ответа (без рассуждений); при остановке — то, что успело прийти.
+    """
+    settings = resolve_settings(settings)
+    stream = _stream_openai if settings["provider"] == PROVIDER_OPENAI else _stream_anthropic
+    return stream(system, turns, on_thinking, on_text, should_stop, settings, client)
+
+
+def encode_screenshot(bgr, settings=None):
+    """Уменьшает скриншот под выбранного провайдера.
+
+    Returns:
+        tuple[bytes, float, int, int]: как у ``prepare_image``.
+    """
+    settings = resolve_settings(settings)
+    if settings["provider"] == PROVIDER_OPENAI:
+        side = max(256, int(settings["openai_max_side"]))
+        return prepare_image(bgr, side, side * side)
+    return prepare_image(bgr)
 
 
 def locate_object(bgr, description, client=None, settings=None):
@@ -313,19 +541,145 @@ def locate_object(bgr, description, client=None, settings=None):
         tuple[tuple[int, int, int, int] | None, str]: рамка в пикселях
             скриншота (или None, если не нашла) и пояснение модели.
     """
-    settings = {**DEFAULT_SETTINGS, **(settings if settings is not None else get_ai_settings())}
-    if settings["provider"] == PROVIDER_OPENAI:
-        side = max(256, int(settings["openai_max_side"]))
-        png, scale, sent_w, sent_h = prepare_image(bgr, side, side * side)
-        result = _ask_openai(png, description, settings, client, sent_w, sent_h)
-    else:
-        png, scale, _, _ = prepare_image(bgr)
-        result = _normalize_result(_ask_anthropic(png, description, settings, client))
+    # Формат, определённый в режиме auto, запоминаем только для настроек
+    # пользователя — не для явно переданных (тесты не пишут в QSettings).
+    persist = settings is None
+    settings = resolve_settings(settings)
+    png, scale, sent_w, sent_h = encode_screenshot(bgr, settings)
+    prompt = f"Найди на скриншоте: {description}"
+    is_openai = settings["provider"] == PROVIDER_OPENAI
+    mode = coords_mode(settings) if is_openai else COORDS_PIXELS
+    if mode == COORDS_NORMALIZED:
+        prompt += "\nКоординаты — в долях 0..1000 от ширины и высоты изображения."
+    elif is_openai:
+        prompt += f"\nИзображение {sent_w}×{sent_h} пикселей; координаты — в его пикселях, (0,0) — левый верхний угол."
 
+    raw, _ = ask_json(_SYSTEM_PROMPT, [user_turn(prompt, png)], _BBOX_SCHEMA, "bbox", "found", settings, client)
+    result = _normalize_result(raw)
     if not result["found"]:
         return None, result["note"]
+
+    if mode == COORDS_AUTO:
+        sent = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+        mode, learned = _detect_coords(sent, result, description, settings, client)
+        if mode is None:
+            return None, "ИИ указал место, но не подтвердил, что объект там, — попробуй описать иначе"
+        if learned and persist:
+            set_ai_settings({"openai_coords_learned": f"{settings['openai_model']}|{mode}"})
+    if mode == COORDS_NORMALIZED:
+        result = _denormalize(result, sent_w, sent_h)
+
     h, w = bgr.shape[:2]
     return to_image_bbox(result, scale, w, h), result["note"]
+
+
+def coords_mode(settings):
+    """Формат координат OpenAI-совместимой модели: заданный в настройках
+    или ранее определённый для этой модели; COORDS_AUTO — ещё неизвестен."""
+    mode = settings["openai_coords"]
+    if mode in (COORDS_PIXELS, COORDS_NORMALIZED):
+        return mode
+    model, _, learned = settings["openai_coords_learned"].partition("|")
+    if model == settings["openai_model"] and learned in (COORDS_PIXELS, COORDS_NORMALIZED):
+        return learned
+    return COORDS_AUTO
+
+
+def _denormalize(result, width, height):
+    result = dict(result)
+    for key, size in (("x", width), ("width", width), ("y", height), ("height", height)):
+        result[key] = result[key] * size / 1000
+    return result
+
+
+def _box(result):
+    return result["x"], result["y"], result["width"], result["height"]
+
+
+def _iou(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+_CHOICE_PROMPT = """\
+Ты проверяешь, правильно ли найден объект на скриншоте. Тебе покажут два \
+увеличенных фрагмента скриншота: A (слева) и B (справа), на каждом красной \
+рамкой обведено место. Ответь, на каком фрагменте внутри красной рамки \
+находится описанный объект. Ответ — только JSON: {"choice": "A" | "B" | "none", \
+"note": "одно короткое предложение по-русски"}."""
+
+_CHOICE_SCHEMA = {
+    "type": "object",
+    "properties": {"choice": {"type": "string", "enum": ["A", "B", "none"]}, "note": {"type": "string"}},
+    "required": ["choice", "note"],
+    "additionalProperties": False,
+}
+
+
+def _detect_coords(sent, result, description, settings, client):
+    """Определяет, в пикселях или в долях 0..1000 ответила модель.
+
+    Returns:
+        tuple[str | None, bool]: формат (None — модель не узнала объект ни
+            в одном толковании) и можно ли его запомнить для этой модели.
+    """
+    height, width = sent.shape[:2]
+    pixels = _box(result)
+    normalized = _box(_denormalize(result, width, height))
+    x, y, w, h = pixels
+    if x + w > 1000 or y + h > 1000:
+        return COORDS_PIXELS, True  # в долях 0..1000 таких чисел не бывает
+    if x + w > width * 1.02 or y + h > height * 1.02:
+        return COORDS_NORMALIZED, True  # в пикселях рамка вылезла бы за картинку
+    if _iou(pixels, normalized) > 0.5:
+        return COORDS_PIXELS, False  # картинка ~1000 px — толкования совпадают, узнать нельзя
+
+    comparison = _comparison_image(sent, [pixels, normalized])
+    ok, png = cv2.imencode(".png", comparison)
+    if not ok:
+        raise AiVisionError("не удалось подготовить картинку для проверки")
+    answer, _ = ask_json(
+        _CHOICE_PROMPT,
+        [user_turn(f"Объект: {description}", png.tobytes())],
+        _CHOICE_SCHEMA,
+        "choice",
+        "choice",
+        settings,
+        client,
+    )
+    choice = str(answer.get("choice", "")).strip().upper()
+    if choice == "A":
+        return COORDS_PIXELS, True
+    if choice == "B":
+        return COORDS_NORMALIZED, True
+    return None, False
+
+
+def _comparison_image(image, boxes, tile_height=320):
+    """Фрагменты вокруг каждой рамки, с красной рамкой и подписью A/B/..., в ряд."""
+    height, width = image.shape[:2]
+    tiles = []
+    for label, (x, y, w, h) in zip("ABCD", boxes):
+        pad = int(max(w, h) * 2 + 30)
+        x0, y0 = max(0, int(x) - pad), max(0, int(y) - pad)
+        x1, y1 = min(width, int(x + w) + pad), min(height, int(y + h) + pad)
+        crop = image[y0:y1, x0:x1].copy()
+        if crop.size == 0:
+            crop = np.zeros((tile_height, tile_height, 3), np.uint8)
+        else:
+            cv2.rectangle(crop, (int(x) - x0, int(y) - y0), (int(x + w) - x0, int(y + h) - y0), (0, 0, 255), 2)
+        zoom = tile_height / crop.shape[0]
+        crop = cv2.resize(crop, (max(1, int(crop.shape[1] * zoom)), tile_height), interpolation=cv2.INTER_NEAREST)
+        banner = np.full((40, crop.shape[1], 3), 255, np.uint8)
+        cv2.putText(banner, label, (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 2)
+        tiles.append(np.vstack([banner, crop]))
+        tiles.append(np.full((tile_height + 40, 20, 3), 255, np.uint8))
+    return np.hstack(tiles[:-1])
 
 
 def count_matches(screen_bgr, template_bgr, threshold):
